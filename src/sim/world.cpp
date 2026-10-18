@@ -56,12 +56,24 @@ std::int64_t Conveyor::encoderCount() const {
     return static_cast<std::int64_t>(std::floor(travelled * spec.encoder.pulsesPerMetre()));
 }
 
+glm::vec3 directionOf(float heading) {
+    return {std::cos(heading), 0.0F, -std::sin(heading)};
+}
+
+glm::vec3 leftOf(glm::vec3 direction) {
+    return {direction.z, 0.0F, -direction.x};
+}
+
+glm::vec3 beltPoint(const ConveyorSpec& spec, float along) {
+    return spec.start + directionOf(spec.heading) * along + glm::vec3(0.0F, spec.beltHeight, 0.0F);
+}
+
 glm::vec3 Conveyor::direction() const {
-    return {std::cos(spec.heading), 0.0F, -std::sin(spec.heading)};
+    return directionOf(spec.heading);
 }
 
 glm::vec3 Conveyor::beltPoint(float along) const {
-    return spec.start + direction() * along + glm::vec3(0.0F, spec.beltHeight, 0.0F);
+    return fsim::beltPoint(spec, along);
 }
 
 // Makes the belts move things. Jolt calls these for every new or continuing
@@ -116,9 +128,31 @@ World::~World() {
         bodies.RemoveBody(item.body);
         bodies.DestroyBody(item.body);
     }
+    const auto destroy = [&](JPH::BodyID id) {
+        if (!id.IsInvalid()) {
+            bodies.RemoveBody(id);
+            bodies.DestroyBody(id);
+        }
+    };
     for (const auto& conveyor : conveyors_) {
-        bodies.RemoveBody(conveyor.body);
-        bodies.DestroyBody(conveyor.body);
+        destroy(conveyor.body);
+        for (const auto id : conveyor.guides) {
+            destroy(id);
+        }
+    }
+    for (const auto& pusher : pushers_) {
+        destroy(pusher.body);
+    }
+    for (const auto& diverter : diverters_) {
+        destroy(diverter.body);
+    }
+    for (const auto& stopper : stoppers_) {
+        destroy(stopper.body);
+    }
+    for (const auto& bin : bins_) {
+        for (const auto id : bin.walls) {
+            destroy(id);
+        }
     }
     bodies.RemoveBody(floor_);
     bodies.DestroyBody(floor_);
@@ -139,8 +173,89 @@ std::size_t World::addConveyor(const ConveyorSpec& spec) {
     belt.mUserData = kConveyorTag | index;
     conveyor.body = physics_.bodies().CreateAndAddBody(belt, JPH::EActivation::DontActivate);
 
+    // Side guides: rails just outside the belt's edges, rising above it.
+    const auto left = leftOf(conveyor.direction());
+    for (const auto& [wanted, sign] : {std::pair{spec.guideLeft, 1.0F}, std::pair{spec.guideRight, -1.0F}}) {
+        if (wanted) {
+            const auto rail = conveyor.beltPoint(spec.length / 2.0F) +
+                              left * sign * (spec.width / 2.0F + kGuideThickness / 2.0F) +
+                              glm::vec3(0.0F, kGuideHeight / 2.0F, 0.0F);
+            conveyor.guides.push_back(addStatic(Pose{rail,
+                                                     glm::angleAxis(spec.heading, glm::vec3(0, 1, 0)),
+                                                     {spec.length, kGuideHeight, kGuideThickness}},
+                                                0.2F));
+        }
+    }
+
     conveyors_.push_back(conveyor);
     return index;
+}
+
+JPH::BodyID World::addStatic(const Pose& pose, float friction) {
+    JPH::BodyCreationSettings settings(makeBox(toJolt(pose.size / 2.0F)),
+                                       JPH::RVec3(pose.center.x, pose.center.y, pose.center.z),
+                                       JPH::Quat(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w),
+                                       JPH::EMotionType::Static, layers::kStatic);
+    settings.mFriction = friction;
+    return physics_.bodies().CreateAndAddBody(settings, JPH::EActivation::DontActivate);
+}
+
+// A body we move ourselves, every step: it pushes boxes but nothing pushes it.
+JPH::BodyID World::addKinematic(const Pose& pose, float friction) {
+    JPH::BodyCreationSettings settings(makeBox(toJolt(pose.size / 2.0F)),
+                                       JPH::RVec3(pose.center.x, pose.center.y, pose.center.z),
+                                       JPH::Quat(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w),
+                                       JPH::EMotionType::Kinematic, layers::kMoving);
+    settings.mFriction = friction;
+    settings.mAllowSleeping = false;
+    return physics_.bodies().CreateAndAddBody(settings, JPH::EActivation::Activate);
+}
+
+std::size_t World::addPusher(const PusherSpec& spec) {
+    Pusher pusher{spec, Stroke(spec.stroke), {}};
+    pusher.body = addKinematic(pusherPaddle(spec, conveyors_.at(spec.conveyor).spec, 0.0), 0.4F);
+    pushers_.push_back(pusher);
+    return pushers_.size() - 1;
+}
+
+std::size_t World::addDiverter(const DiverterSpec& spec) {
+    Diverter diverter{spec, Stroke(spec.stroke), {}};
+    diverter.body =
+        addKinematic(diverterArm(spec, conveyors_.at(spec.conveyor).spec, 0.0), 0.05F); // boxes slide along it
+    diverters_.push_back(diverter);
+    return diverters_.size() - 1;
+}
+
+std::size_t World::addStopper(const StopperSpec& spec) {
+    Stopper stopper{spec, Stroke(spec.stroke), {}};
+    stopper.body = addKinematic(stopperBlade(spec, conveyors_.at(spec.conveyor).spec, 0.0), 0.1F);
+    stoppers_.push_back(stopper);
+    return stoppers_.size() - 1;
+}
+
+std::size_t World::addBin(const BinSpec& spec) {
+    Bin bin{spec, {}, 0, {}};
+    for (const auto& wall : binWalls(spec, conveyors_.at(spec.conveyor).spec)) {
+        bin.walls.push_back(addStatic(wall, 0.6F));
+    }
+    bins_.push_back(bin);
+    return bins_.size() - 1;
+}
+
+void World::setStrokes(const std::vector<PusherSpec>& pushers, const std::vector<DiverterSpec>& diverters,
+                       const std::vector<StopperSpec>& stoppers) {
+    for (std::size_t i = 0; i < pushers.size() && i < pushers_.size(); ++i) {
+        pushers_[i].spec = pushers[i];
+        pushers_[i].stroke.spec = pushers[i].stroke;
+    }
+    for (std::size_t i = 0; i < diverters.size() && i < diverters_.size(); ++i) {
+        diverters_[i].spec = diverters[i];
+        diverters_[i].stroke.spec = diverters[i].stroke;
+    }
+    for (std::size_t i = 0; i < stoppers.size() && i < stoppers_.size(); ++i) {
+        stoppers_[i].spec = stoppers[i];
+        stoppers_[i].stroke.spec = stoppers[i].stroke;
+    }
 }
 
 std::size_t World::addPhotocell(const PhotocellSpec& spec) {
@@ -205,6 +320,9 @@ void World::removeItem(ItemId id) {
     physics_.bodies().RemoveBody(it->body);
     physics_.bodies().DestroyBody(it->body);
     items_.erase(it);
+    for (auto& bin : bins_) {
+        std::erase(bin.inside, id); // it may come back as a new box with a new id, never this one
+    }
 }
 
 void World::clearItems() {
@@ -213,6 +331,9 @@ void World::clearItems() {
         physics_.bodies().DestroyBody(item.body);
     }
     items_.clear();
+    for (auto& bin : bins_) {
+        bin.inside.clear();
+    }
 }
 
 int World::advance(double seconds, int maxSteps) {
@@ -240,11 +361,61 @@ void World::run(double seconds) {
 void World::step() {
     const double stepStart = time();
     updateConveyors();
+    updateActuators(stepStart, stepStart + kStep);
     updateSpawners();
     physics_.step(static_cast<float>(kStep));
     removeFallenItems();
     ++stepCount_;
     updatePhotocells(stepStart, time()); // the world now is as it is at the end of the step
+    updateBins();
+}
+
+// Each actuator's stroke moves through the step, and its body is told where
+// to be at the end of it. MoveKinematic gives the body the velocity that
+// gets it there in one step, so it pushes boxes with that velocity, as a
+// real paddle would.
+void World::updateActuators(double stepStart, double stepEnd) {
+    auto& bodies = physics_.bodies();
+    const auto move = [&](JPH::BodyID body, const Pose& pose) {
+        bodies.MoveKinematic(body, JPH::RVec3(pose.center.x, pose.center.y, pose.center.z),
+                             JPH::Quat(pose.rotation.x, pose.rotation.y, pose.rotation.z, pose.rotation.w),
+                             static_cast<float>(kStep));
+    };
+    for (auto& pusher : pushers_) {
+        pusher.stroke.update(stepStart, stepEnd);
+        move(pusher.body, pusherPaddle(pusher.spec, conveyors_[pusher.spec.conveyor].spec, pusher.stroke.position()));
+    }
+    for (auto& diverter : diverters_) {
+        diverter.stroke.update(stepStart, stepEnd);
+        move(diverter.body,
+             diverterArm(diverter.spec, conveyors_[diverter.spec.conveyor].spec, diverter.stroke.position()));
+    }
+    for (auto& stopper : stoppers_) {
+        stopper.stroke.update(stepStart, stepEnd);
+        move(stopper.body,
+             stopperBlade(stopper.spec, conveyors_[stopper.spec.conveyor].spec, stopper.stroke.position()));
+    }
+}
+
+// A bin counts each box once, when its centre comes inside the bin.
+void World::updateBins() {
+    if (bins_.empty()) {
+        return;
+    }
+    const auto& bodies = physics_.bodies();
+    for (auto& bin : bins_) {
+        const auto inside = binInside(bin.spec, conveyors_[bin.spec.conveyor].spec);
+        const auto toLocal = glm::conjugate(inside.rotation);
+        for (const auto& item : items_) {
+            const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
+            const auto local = toLocal * (center - inside.center);
+            const bool in = glm::all(glm::lessThanEqual(glm::abs(local), inside.size / 2.0F));
+            if (in && std::find(bin.inside.begin(), bin.inside.end(), item.id) == bin.inside.end()) {
+                bin.inside.push_back(item.id);
+                ++bin.count;
+            }
+        }
+    }
 }
 
 // Each belt ramps its speed towards the target, like a VFD with a ramp time.

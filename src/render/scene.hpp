@@ -15,7 +15,7 @@ namespace fsim {
 
 // What a drawn box belongs to, so a click can select it.
 struct Pick {
-    enum class Kind { None, Conveyor, Photocell, Spawner };
+    enum class Kind { None, Conveyor, Photocell, Spawner, Pusher, Diverter, Stopper, Bin };
     Kind kind = Kind::None;
     std::size_t index = 0;
 
@@ -45,6 +45,14 @@ std::vector<DrawBox> conveyorBoxes(const Conveyor& conveyor);
 // other, the beam between them, and the indicator LED, lit while the
 // output is on.
 std::vector<DrawBox> photocellBoxes(const Photocell& photocell, const Conveyor& conveyor);
+
+// The actuators, at their stroke's current position: a pusher's cylinder,
+// rod and paddle (with LEDs for its end position sensors), a diverter's arm
+// and pivot, a stopper's blade. A bin's floor and walls.
+std::vector<DrawBox> pusherBoxes(const Pusher& pusher, const ConveyorSpec& conveyor);
+std::vector<DrawBox> diverterBoxes(const Diverter& diverter, const ConveyorSpec& conveyor);
+std::vector<DrawBox> stopperBoxes(const Stopper& stopper, const ConveyorSpec& conveyor);
+std::vector<DrawBox> binBoxes(const Bin& bin, const ConveyorSpec& conveyor);
 
 // A spawner: a gate over the belt where its boxes appear.
 std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& conveyor);

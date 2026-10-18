@@ -53,7 +53,21 @@ This is the general pattern for extending an engine: **callbacks** at the points
 
 ---
 
-## 5. Engine details that bit
+## 5. Things we move: kinematic bodies
+
+Pushers, diverter arms and stopper blades are a third kind of body: **kinematic**. Like static bodies, nothing pushes them; unlike static ones, they move, because *we* move them. Every step, `World::updateActuators` advances each actuator's stroke (our pneumatic model: dead time, then a steady stroke) and calls:
+
+```cpp
+bodies.MoveKinematic(body, targetPosition, targetRotation, stepTime);
+```
+
+That doesn't teleport the body: it gives it exactly the velocity that gets it to the target by the end of the step. So when the paddle meets a box, the engine sees a body moving at, say, 0.9 m/s, and pushes the box accordingly; a teleported paddle would appear inside the box with no velocity, and the engine would shove the box out sideways, at random.
+
+Where each part goes is one function per actuator (`pusherPaddle`, `diverterArm`, `stopperBlade`), used both for the physics and for drawing, so what you see is exactly what pushes. The stroke timing is ours (it's about air cylinders); the contacts it causes are the engine's.
+
+A kinematic stopper blade rises through the belt, which is static, without any trouble: the engine never computes contacts between two bodies that aren't dynamic.
+
+## 6. Engine details that bit
 
 **Sleeping.** Engines put bodies to sleep when they haven't moved for a while, to save time; contacts with moving bodies wake them. A box on a *stopped* belt falls asleep. Starting the belt doesn't touch the box (it only changes the surface speed in the contact settings), so nothing wakes it, and the box stays put on a moving belt. Boxes are created with `mAllowSleeping = false`. The cost is small: a few hundred boxes always awake.
 
@@ -61,11 +75,15 @@ This is the general pattern for extending an engine: **callbacks** at the points
 
 **One-time setup.** Jolt needs process-wide setup (an allocator, a factory of types) once, before any physics system exists. `initialiseJoltOnce` uses `std::call_once`, so creating several worlds (every test does) sets it up exactly once, even from several threads.
 
+**Same height, wrong turn.** A box reaching a conveyor turned 90 degrees was dragged sideways off the first belt while still almost entirely on it: at the same height, the turned belt's moving surface caught its front edge. Real right-angle transfers put the second belt a little lower; so does `addConveyorAfter` (2 cm). The engine was right; the model of the machine was wrong.
+
+**Fast pushers throw boxes.** A pusher crossing the belt in 0.12 s launched boxes at nearly 4 m/s, right over the bin. The stroke time decides where a pushed box lands; the default is now 0.5 s out.
+
 **Include order.** `Jolt/Jolt.h` must come before any other Jolt header, because it sets up the configuration the others depend on. Formatting the code sorted the includes alphabetically once and broke the build with hundreds of errors; they're now fenced with `// clang-format off`.
 
 ---
 
-## 6. Ours versus the engine's
+## 7. Ours versus the engine's
 
 | The engine does | factory_sim does |
 |---|---|

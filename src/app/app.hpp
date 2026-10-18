@@ -42,6 +42,13 @@ private:
     void drawConveyorInspector(std::size_t index);
     void drawPhotocellInspector(std::size_t index);
     void drawSpawnerInspector(std::size_t index);
+    void drawPusherInspector(std::size_t index);
+    void drawDiverterInspector(std::size_t index);
+    void drawStopperInspector(std::size_t index);
+    void drawBinInspector(std::size_t index);
+    // The manual controls of an actuator, and its sensors' LEDs.
+    void drawStrokeControls(Stroke& stroke, Pick pick);
+    void finishFiring(); // pushers fired once retract when they get there
     void drawTriggers();
     void followScene(); // the world catches up with the scene
     void restartRun();  // a new world from the scene: no boxes, time 0
@@ -67,6 +74,7 @@ private:
     double frameSeconds_ = 0.0; // the last frame's real duration, for the panel
     int stepsLastFrame_ = 0;
     float scanMilliseconds_ = 10.0F; // a PLC reading the photocell this often (for the trigger table)
+    std::vector<Pick> firing_;       // actuators fired once by hand: they retract when fully out
 };
 
 } // namespace fsim

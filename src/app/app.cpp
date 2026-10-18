@@ -103,6 +103,7 @@ void App::frame(double realSeconds, int width, int height) {
     realSeconds = std::min(realSeconds, 0.25);
     frameSeconds_ = realSeconds;
     stepsLastFrame_ = paused_ ? 0 : world_->advance(realSeconds * timeScale_);
+    finishFiring();
     renderer_.draw(sceneBoxes(*world_, 1.0, selected_), camera_, width, height);
 }
 
@@ -187,6 +188,18 @@ void App::deleteSelected() {
     case Pick::Kind::Spawner:
         removeSpawner(scene(), selected_->index);
         break;
+    case Pick::Kind::Pusher:
+        removePusher(scene(), selected_->index);
+        break;
+    case Pick::Kind::Diverter:
+        removeDiverter(scene(), selected_->index);
+        break;
+    case Pick::Kind::Stopper:
+        removeStopper(scene(), selected_->index);
+        break;
+    case Pick::Kind::Bin:
+        removeBin(scene(), selected_->index);
+        break;
     case Pick::Kind::None:
         break;
     }
@@ -198,10 +211,33 @@ void App::keepSelectionValid() {
     if (!selected_) {
         return;
     }
-    const auto count = selected_->kind == Pick::Kind::Conveyor    ? scene().conveyors.size()
-                       : selected_->kind == Pick::Kind::Photocell ? scene().photocells.size()
-                       : selected_->kind == Pick::Kind::Spawner   ? scene().spawners.size()
-                                                                  : 0;
+    const auto& s = scene();
+    std::size_t count = 0;
+    switch (selected_->kind) {
+    case Pick::Kind::Conveyor:
+        count = s.conveyors.size();
+        break;
+    case Pick::Kind::Photocell:
+        count = s.photocells.size();
+        break;
+    case Pick::Kind::Spawner:
+        count = s.spawners.size();
+        break;
+    case Pick::Kind::Pusher:
+        count = s.pushers.size();
+        break;
+    case Pick::Kind::Diverter:
+        count = s.diverters.size();
+        break;
+    case Pick::Kind::Stopper:
+        count = s.stoppers.size();
+        break;
+    case Pick::Kind::Bin:
+        count = s.bins.size();
+        break;
+    case Pick::Kind::None:
+        break;
+    }
     if (selected_->index >= count) {
         selected_.reset();
     }
@@ -219,6 +255,14 @@ std::optional<std::size_t> App::selectedConveyor() const {
         return s.photocells[selected_->index].conveyor;
     case Pick::Kind::Spawner:
         return s.spawners[selected_->index].conveyor;
+    case Pick::Kind::Pusher:
+        return s.pushers[selected_->index].conveyor;
+    case Pick::Kind::Diverter:
+        return s.diverters[selected_->index].conveyor;
+    case Pick::Kind::Stopper:
+        return s.stoppers[selected_->index].conveyor;
+    case Pick::Kind::Bin:
+        return s.bins[selected_->index].conveyor;
     case Pick::Kind::None:
         break;
     }
@@ -327,6 +371,31 @@ void App::drawLinePanel() {
         selectable(fmt::format("spawner on {}, every {:.2f} s###s{}", on, sp.interval, i),
                    Pick{Pick::Kind::Spawner, i});
     }
+    const auto conveyorName = [&](std::size_t c) {
+        return c < s.conveyors.size() ? s.conveyors[c].spec.name : std::string("?");
+    };
+    ImGui::SeparatorText("Actuators and bins");
+    for (std::size_t i = 0; i < s.pushers.size(); ++i) {
+        const auto& a = s.pushers[i];
+        selectable(fmt::format("{}  pusher on {} at {:.2f} m###pu{}", a.name, conveyorName(a.conveyor), a.along, i),
+                   Pick{Pick::Kind::Pusher, i});
+    }
+    for (std::size_t i = 0; i < s.diverters.size(); ++i) {
+        const auto& a = s.diverters[i];
+        selectable(fmt::format("{}  diverter on {} at {:.2f} m###di{}", a.name, conveyorName(a.conveyor), a.along, i),
+                   Pick{Pick::Kind::Diverter, i});
+    }
+    for (std::size_t i = 0; i < s.stoppers.size(); ++i) {
+        const auto& a = s.stoppers[i];
+        selectable(fmt::format("{}  stopper on {} at {:.2f} m###st{}", a.name, conveyorName(a.conveyor), a.along, i),
+                   Pick{Pick::Kind::Stopper, i});
+    }
+    for (std::size_t i = 0; i < s.bins.size(); ++i) {
+        const auto& b = s.bins[i];
+        const auto count = i < world_->bins().size() ? world_->bins()[i].count : 0;
+        selectable(fmt::format("{}  bin beside {}: {} boxes###bi{}", b.name, conveyorName(b.conveyor), count, i),
+                   Pick{Pick::Kind::Bin, i});
+    }
 
     ImGui::SeparatorText("Add");
     const auto conveyor = selectedConveyor();
@@ -357,6 +426,22 @@ void App::drawLinePanel() {
         selected_ = Pick{Pick::Kind::Spawner, addSpawner(s, *conveyor)};
     }
     ImGui::SetItemTooltip("At the start of the selected conveyor");
+    if (ImGui::SmallButton("Pusher")) {
+        selected_ = Pick{Pick::Kind::Pusher, addPusher(s, *conveyor)};
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Diverter")) {
+        selected_ = Pick{Pick::Kind::Diverter, addDiverter(s, *conveyor)};
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Stopper")) {
+        selected_ = Pick{Pick::Kind::Stopper, addStopper(s, *conveyor)};
+    }
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Bin")) {
+        selected_ = Pick{Pick::Kind::Bin, addBin(s, *conveyor)};
+    }
+    ImGui::SetItemTooltip("Beside the selected conveyor, across from its pusher if it has one");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!selected_);
@@ -383,6 +468,18 @@ void App::drawInspector() {
             break;
         case Pick::Kind::Spawner:
             drawSpawnerInspector(selected_->index);
+            break;
+        case Pick::Kind::Pusher:
+            drawPusherInspector(selected_->index);
+            break;
+        case Pick::Kind::Diverter:
+            drawDiverterInspector(selected_->index);
+            break;
+        case Pick::Kind::Stopper:
+            drawStopperInspector(selected_->index);
+            break;
+        case Pick::Kind::Bin:
+            drawBinInspector(selected_->index);
             break;
         case Pick::Kind::None:
             break;
@@ -427,6 +524,12 @@ void App::drawConveyorInspector(std::size_t index) {
         }
         ImGui::SetItemTooltip("Direction of travel: 0 = along +X, 90 = along -Z");
     }
+
+    ImGui::Checkbox("guide left", &spec.guideLeft);
+    ImGui::SameLine();
+    ImGui::Checkbox("guide right", &spec.guideRight);
+    ImGui::SetItemTooltip(
+        "Rails along the belt's edges that keep boxes on it (left and right looking along the travel)");
 
     ImGui::SeparatorText("Size");
     ImGui::SetNextItemWidth(kFieldWidth);
@@ -577,6 +680,164 @@ void App::drawTriggers() {
         ImGui::EndTable();
     }
     ImGui::End();
+}
+
+// ---------------------------------------------------------------- Actuators
+
+namespace {
+
+void led(const char* label, bool on) {
+    ImGui::ColorButton(label, on ? ImVec4(1.0F, 0.85F, 0.1F, 1.0F) : ImVec4(0.25F, 0.22F, 0.12F, 1.0F),
+                       ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
+}
+
+void sideCombo(Side& side) {
+    int value = side == Side::Left ? 0 : 1;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    if (ImGui::Combo("side", &value, "left\0right\0")) {
+        side = value == 0 ? Side::Left : Side::Right;
+    }
+    ImGui::SetItemTooltip("Left or right, looking along the belt's travel");
+}
+
+void strokeTimes(StrokeSpec& stroke) {
+    scaledSlider("dead time", stroke.deadTime, 1000.0, 0.0F, 100.0F, "%.0f ms");
+    ImGui::SetItemTooltip("From the valve switching to the movement starting: air flowing, pressure building");
+    scaledSlider("out in", stroke.extendTime, 1000.0, 20.0F, 2000.0F, "%.0f ms");
+    scaledSlider("back in", stroke.retractTime, 1000.0, 20.0F, 2000.0F, "%.0f ms");
+}
+
+} // namespace
+
+// The valve, by hand: Extend and Retract switch it; Fire once extends and
+// retracts again as soon as the cylinder is fully out (as a reject would).
+// The LEDs are the cylinder's end position sensors.
+void App::drawStrokeControls(Stroke& stroke, Pick pick) {
+    ImGui::SeparatorText("By hand");
+    const double now = world_->time();
+    if (ImGui::Button("Extend")) {
+        stroke.command(now, true);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Retract")) {
+        stroke.command(now, false);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Fire once")) {
+        stroke.command(now, true);
+        firing_.push_back(pick);
+    }
+    ImGui::Text("valve %s", stroke.commanded() ? "OUT" : "back");
+    ImGui::SameLine();
+    led("##retracted", stroke.retracted().value());
+    ImGui::SameLine();
+    ImGui::TextUnformatted("retracted");
+    ImGui::SameLine();
+    led("##extended", stroke.extended().value());
+    ImGui::SameLine();
+    ImGui::TextUnformatted("extended");
+    ImGui::ProgressBar(static_cast<float>(stroke.position()), ImVec2(kFieldWidth, 0.0F), "");
+    ImGui::SameLine();
+    ImGui::TextColored(kDim, "stroke");
+    ImGui::TextColored(kDim, "Milestone 5 will drive these from control logic; here, by hand.");
+}
+
+void App::finishFiring() {
+    std::erase_if(firing_, [&](const Pick& pick) {
+        Stroke* stroke = nullptr;
+        if (pick.kind == Pick::Kind::Pusher && pick.index < world_->pushers().size()) {
+            stroke = &world_->pushers()[pick.index].stroke;
+        } else if (pick.kind == Pick::Kind::Diverter && pick.index < world_->diverters().size()) {
+            stroke = &world_->diverters()[pick.index].stroke;
+        } else if (pick.kind == Pick::Kind::Stopper && pick.index < world_->stoppers().size()) {
+            stroke = &world_->stoppers()[pick.index].stroke;
+        }
+        if (stroke == nullptr) {
+            return true; // gone (the run restarted)
+        }
+        if (stroke->extended().value()) {
+            stroke->command(world_->time(), false);
+            return true;
+        }
+        return false;
+    });
+}
+
+void App::drawPusherInspector(std::size_t index) {
+    auto& s = scene();
+    auto& spec = s.pushers[index];
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::InputText("name", &spec.name);
+    conveyorCombo("on conveyor", spec.conveyor, s);
+    const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
+    sideCombo(spec.side);
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderFloat("paddle", &spec.paddleLength, 0.05F, 1.0F, "%.2f m long");
+    strokeTimes(spec.stroke);
+    ImGui::TextColored(kDim, "Pushes boxes off the other side: put a bin there.");
+    if (index < world_->pushers().size()) {
+        drawStrokeControls(world_->pushers()[index].stroke, Pick{Pick::Kind::Pusher, index});
+    }
+}
+
+void App::drawDiverterInspector(std::size_t index) {
+    auto& s = scene();
+    auto& spec = s.diverters[index];
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::InputText("name", &spec.name);
+    conveyorCombo("on conveyor", spec.conveyor, s);
+    const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderFloat("pivot at", &spec.along, 0.0F, length, "%.3f m");
+    sideCombo(spec.side);
+    scaledSlider("angle", spec.angle, kDegrees, 15.0F, 70.0F, "%.0f deg");
+    strokeTimes(spec.stroke);
+    ImGui::TextColored(kDim, "Swung out, it guides boxes off the other side.");
+    if (index < world_->diverters().size()) {
+        drawStrokeControls(world_->diverters()[index].stroke, Pick{Pick::Kind::Diverter, index});
+    }
+}
+
+void App::drawStopperInspector(std::size_t index) {
+    auto& s = scene();
+    auto& spec = s.stoppers[index];
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::InputText("name", &spec.name);
+    conveyorCombo("on conveyor", spec.conveyor, s);
+    const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
+    scaledSlider("rises", spec.height, 1000.0F, 10.0F, 150.0F, "%.0f mm above the belt");
+    strokeTimes(spec.stroke);
+    ImGui::TextColored(kDim, "Raised, boxes stop against it while the belt slides under them.");
+    if (index < world_->stoppers().size()) {
+        drawStrokeControls(world_->stoppers()[index].stroke, Pick{Pick::Kind::Stopper, index});
+    }
+}
+
+void App::drawBinInspector(std::size_t index) {
+    auto& s = scene();
+    auto& spec = s.bins[index];
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::InputText("name", &spec.name);
+    conveyorCombo("beside conveyor", spec.conveyor, s);
+    const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
+    sideCombo(spec.side);
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderFloat3("size", &spec.size.x, 0.2F, 1.0F, "%.2f m");
+    ImGui::SetItemTooltip("Along the belt, height, out from the belt");
+    if (index < world_->bins().size()) {
+        auto& bin = world_->bins()[index];
+        ImGui::Text("%zu boxes landed in it", bin.count);
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Reset count")) {
+            bin.count = 0;
+        }
+    }
 }
 
 } // namespace fsim

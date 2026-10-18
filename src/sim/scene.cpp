@@ -16,10 +16,6 @@ using json = nlohmann::json;
 constexpr int kFormat = 1;
 constexpr float kQuarterTurn = std::numbers::pi_v<float> / 2.0F;
 
-glm::vec3 directionOf(float heading) {
-    return {std::cos(heading), 0.0F, -std::sin(heading)};
-}
-
 // The first free name of the form C1, C2, ... (or B1, B2, ...).
 template <class Items, class NameOf> std::string freeName(const Items& items, const char* prefix, NameOf nameOf) {
     for (int n = 1;; ++n) {
@@ -36,6 +32,37 @@ void shiftDown(std::size_t& index, std::size_t removed) {
     if (index > removed) {
         --index;
     }
+}
+
+// Everything in `items` that stood on conveyor `removed` goes; the rest
+// refers to its conveyor by an index that may shift.
+template <class Items> void dropFrom(Items& items, std::size_t removed) {
+    std::erase_if(items, [&](const auto& item) { return item.conveyor == removed; });
+    for (auto& item : items) {
+        shiftDown(item.conveyor, removed);
+    }
+}
+
+template <class Items> void eraseAt(Items& items, std::size_t index) {
+    if (index < items.size()) {
+        items.erase(items.begin() + static_cast<std::ptrdiff_t>(index));
+    }
+}
+
+// What of an actuator is its place (the layout), with its name and timing
+// taken out, so two of them compare equal when only those differ.
+template <class Spec> Spec placementOf(Spec spec) {
+    spec.name.clear();
+    if constexpr (requires { spec.stroke; }) {
+        spec.stroke = StrokeSpec{};
+    }
+    return spec;
+}
+
+template <class Specs> bool samePlaces(const Specs& a, const Specs& b) {
+    return a.size() == b.size() && std::equal(a.begin(), a.end(), b.begin(), [](const auto& x, const auto& y) {
+               return placementOf(x) == placementOf(y);
+           });
 }
 
 } // namespace
@@ -90,14 +117,16 @@ std::vector<ConveyorSpec> placeConveyors(const Scene& scene) {
 }
 
 bool sameLayout(const Scene& a, const Scene& b) {
-    if (a.conveyors.size() != b.conveyors.size()) {
+    if (a.conveyors.size() != b.conveyors.size() || !samePlaces(a.pushers, b.pushers) ||
+        !samePlaces(a.diverters, b.diverters) || !samePlaces(a.stoppers, b.stoppers) || !samePlaces(a.bins, b.bins)) {
         return false;
     }
     const auto pa = placeConveyors(a);
     const auto pb = placeConveyors(b);
     for (std::size_t i = 0; i < pa.size(); ++i) {
         if (pa[i].start != pb[i].start || pa[i].heading != pb[i].heading || pa[i].length != pb[i].length ||
-            pa[i].width != pb[i].width || pa[i].beltHeight != pb[i].beltHeight) {
+            pa[i].width != pb[i].width || pa[i].beltHeight != pb[i].beltHeight || pa[i].guideLeft != pb[i].guideLeft ||
+            pa[i].guideRight != pb[i].guideRight) {
             return false;
         }
     }
@@ -115,6 +144,25 @@ std::unique_ptr<World> buildWorld(const Scene& scene) {
     for (const auto& photocell : scene.photocells) {
         world->addPhotocell(photocell);
     }
+    // (Anything on a conveyor that doesn't exist is left out: the loader
+    // rejects such files, so it only happens to a scene built by hand.)
+    const auto exists = [&](std::size_t conveyor) { return conveyor < world->conveyors().size(); };
+    for (const auto& pusher : scene.pushers) {
+        if (exists(pusher.conveyor))
+            world->addPusher(pusher);
+    }
+    for (const auto& diverter : scene.diverters) {
+        if (exists(diverter.conveyor))
+            world->addDiverter(diverter);
+    }
+    for (const auto& stopper : scene.stoppers) {
+        if (exists(stopper.conveyor))
+            world->addStopper(stopper);
+    }
+    for (const auto& bin : scene.bins) {
+        if (exists(bin.conveyor))
+            world->addBin(bin);
+    }
     return world;
 }
 
@@ -125,6 +173,7 @@ void applyLive(World& world, const Scene& scene) {
     }
     world.setPhotocells(scene.photocells);
     world.setSpawners(scene.spawners);
+    world.setStrokes(scene.pushers, scene.diverters, scene.stoppers);
 }
 
 // ---------------------------------------------------------------- Editing
@@ -135,6 +184,16 @@ std::size_t addConveyorAfter(Scene& scene, std::size_t conveyor, Turn turn) {
     next.spec.name = freeName(scene.conveyors, "C", [](const PlacedConveyor& c) { return c.spec.name; });
     next.follows = conveyor;
     next.turn = turn;
+    // A box coming off the conveyor before lands across a turned belt: a
+    // guide on the far side stops it flying off and turns it.
+    next.spec.guideLeft = turn == Turn::Right;
+    next.spec.guideRight = turn == Turn::Left;
+    // And it sits a little lower, so a box only drops onto it once it has
+    // really left the conveyor before; at the same height, the turned belt
+    // would catch its front edge and drag it sideways off the first one.
+    if (turn != Turn::Straight) {
+        next.spec.beltHeight -= 0.02F;
+    }
     scene.conveyors.push_back(next);
     return scene.conveyors.size() - 1;
 }
@@ -175,14 +234,68 @@ void removeConveyor(Scene& scene, std::size_t conveyor) {
     }
     scene.conveyors.erase(scene.conveyors.begin() + static_cast<std::ptrdiff_t>(conveyor));
     // What stood on it goes with it.
-    std::erase_if(scene.photocells, [&](const PhotocellSpec& p) { return p.conveyor == conveyor; });
-    std::erase_if(scene.spawners, [&](const SpawnerSpec& s) { return s.conveyor == conveyor; });
-    for (auto& p : scene.photocells) {
-        shiftDown(p.conveyor, conveyor);
+    dropFrom(scene.photocells, conveyor);
+    dropFrom(scene.spawners, conveyor);
+    dropFrom(scene.pushers, conveyor);
+    dropFrom(scene.diverters, conveyor);
+    dropFrom(scene.stoppers, conveyor);
+    dropFrom(scene.bins, conveyor);
+}
+
+std::size_t addPusher(Scene& scene, std::size_t conveyor) {
+    PusherSpec pusher;
+    pusher.name = freeName(scene.pushers, "P", [](const PusherSpec& p) { return p.name; });
+    pusher.conveyor = conveyor;
+    pusher.along = scene.conveyors.at(conveyor).spec.length * 2.0F / 3.0F;
+    scene.pushers.push_back(pusher);
+    return scene.pushers.size() - 1;
+}
+
+std::size_t addDiverter(Scene& scene, std::size_t conveyor) {
+    DiverterSpec diverter;
+    diverter.name = freeName(scene.diverters, "D", [](const DiverterSpec& d) { return d.name; });
+    diverter.conveyor = conveyor;
+    diverter.along = scene.conveyors.at(conveyor).spec.length / 3.0F;
+    scene.diverters.push_back(diverter);
+    return scene.diverters.size() - 1;
+}
+
+std::size_t addStopper(Scene& scene, std::size_t conveyor) {
+    StopperSpec stopper;
+    stopper.name = freeName(scene.stoppers, "S", [](const StopperSpec& s) { return s.name; });
+    stopper.conveyor = conveyor;
+    stopper.along = scene.conveyors.at(conveyor).spec.length - 0.3F;
+    scene.stoppers.push_back(stopper);
+    return scene.stoppers.size() - 1;
+}
+
+std::size_t addBin(Scene& scene, std::size_t conveyor) {
+    BinSpec bin;
+    bin.name = freeName(scene.bins, "Bin", [](const BinSpec& b) { return b.name; });
+    bin.conveyor = conveyor;
+    bin.along = scene.conveyors.at(conveyor).spec.length / 2.0F;
+    // Opposite the last pusher on this conveyor, where it pushes boxes to.
+    for (const auto& pusher : scene.pushers) {
+        if (pusher.conveyor == conveyor) {
+            bin.along = pusher.along;
+            bin.side = pusher.side == Side::Left ? Side::Right : Side::Left;
+        }
     }
-    for (auto& s : scene.spawners) {
-        shiftDown(s.conveyor, conveyor);
-    }
+    scene.bins.push_back(bin);
+    return scene.bins.size() - 1;
+}
+
+void removePusher(Scene& scene, std::size_t index) {
+    eraseAt(scene.pushers, index);
+}
+void removeDiverter(Scene& scene, std::size_t index) {
+    eraseAt(scene.diverters, index);
+}
+void removeStopper(Scene& scene, std::size_t index) {
+    eraseAt(scene.stoppers, index);
+}
+void removeBin(Scene& scene, std::size_t index) {
+    eraseAt(scene.bins, index);
 }
 
 std::size_t addPhotocell(Scene& scene, std::size_t conveyor) {
@@ -228,6 +341,29 @@ glm::vec3 vec3From(const json& j, glm::vec3 fallback) {
     return {j[0].get<float>(), j[1].get<float>(), j[2].get<float>()};
 }
 
+json strokeJson(const StrokeSpec& s) {
+    return {{"deadTime", s.deadTime}, {"extendTime", s.extendTime}, {"retractTime", s.retractTime}};
+}
+
+StrokeSpec strokeFrom(const json& j, StrokeSpec s) {
+    if (j.is_object()) {
+        s.deadTime = j.value("deadTime", s.deadTime);
+        s.extendTime = j.value("extendTime", s.extendTime);
+        s.retractTime = j.value("retractTime", s.retractTime);
+    }
+    return s;
+}
+
+const char* sideName(Side side) {
+    return side == Side::Left ? "left" : "right";
+}
+Side sideFrom(const json& j, Side fallback) {
+    if (!j.is_string()) {
+        return fallback;
+    }
+    return j.get<std::string>() == "left" ? Side::Left : Side::Right;
+}
+
 const char* turnName(Turn turn) {
     switch (turn) {
     case Turn::Left:
@@ -243,8 +379,9 @@ const char* turnName(Turn turn) {
 } // namespace
 
 std::string sceneToJson(const Scene& scene) {
-    json data = {
-        {"format", kFormat}, {"conveyors", json::array()}, {"photocells", json::array()}, {"spawners", json::array()}};
+    json data = {{"format", kFormat},         {"conveyors", json::array()}, {"photocells", json::array()},
+                 {"spawners", json::array()}, {"pushers", json::array()},   {"diverters", json::array()},
+                 {"stoppers", json::array()}, {"bins", json::array()}};
     for (const auto& c : scene.conveyors) {
         json conveyor = {{"name", c.spec.name},
                          {"length", c.spec.length},
@@ -252,6 +389,8 @@ std::string sceneToJson(const Scene& scene) {
                          {"beltHeight", c.spec.beltHeight},
                          {"targetSpeed", c.spec.targetSpeed},
                          {"acceleration", c.spec.acceleration},
+                         {"guideLeft", c.spec.guideLeft},
+                         {"guideRight", c.spec.guideRight},
                          {"encoder",
                           {{"pulsesPerRevolution", c.spec.encoder.pulsesPerRevolution},
                            {"rollerDiameter", c.spec.encoder.rollerDiameter}}}};
@@ -282,6 +421,36 @@ std::string sceneToJson(const Scene& scene) {
                                     {"offset", s.offset},
                                     {"enabled", s.enabled}});
     }
+    for (const auto& p : scene.pushers) {
+        data["pushers"].push_back({{"name", p.name},
+                                   {"conveyor", p.conveyor},
+                                   {"along", p.along},
+                                   {"side", sideName(p.side)},
+                                   {"paddleLength", p.paddleLength},
+                                   {"stroke", strokeJson(p.stroke)}});
+    }
+    for (const auto& d : scene.diverters) {
+        data["diverters"].push_back({{"name", d.name},
+                                     {"conveyor", d.conveyor},
+                                     {"along", d.along},
+                                     {"side", sideName(d.side)},
+                                     {"angle", d.angle},
+                                     {"stroke", strokeJson(d.stroke)}});
+    }
+    for (const auto& s : scene.stoppers) {
+        data["stoppers"].push_back({{"name", s.name},
+                                    {"conveyor", s.conveyor},
+                                    {"along", s.along},
+                                    {"height", s.height},
+                                    {"stroke", strokeJson(s.stroke)}});
+    }
+    for (const auto& b : scene.bins) {
+        data["bins"].push_back({{"name", b.name},
+                                {"conveyor", b.conveyor},
+                                {"along", b.along},
+                                {"side", sideName(b.side)},
+                                {"size", vec3(b.size)}});
+    }
     return data.dump(2) + "\n";
 }
 
@@ -304,6 +473,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             spec.beltHeight = c.value("beltHeight", defaults.spec.beltHeight);
             spec.targetSpeed = c.value("targetSpeed", defaults.spec.targetSpeed);
             spec.acceleration = c.value("acceleration", defaults.spec.acceleration);
+            spec.guideLeft = c.value("guideLeft", false);
+            spec.guideRight = c.value("guideRight", false);
             const auto encoder = c.value("encoder", json::object());
             spec.encoder.pulsesPerRevolution = encoder.value("pulsesPerRevolution", spec.encoder.pulsesPerRevolution);
             spec.encoder.rollerDiameter = encoder.value("rollerDiameter", spec.encoder.rollerDiameter);
@@ -355,6 +526,56 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
                 return tl::unexpected(ok.error());
             }
             scene.spawners.push_back(spawner);
+        }
+        for (const auto& j : data.value("pushers", json::array())) {
+            PusherSpec p;
+            p.name = j.value("name", p.name);
+            p.conveyor = j.value("conveyor", p.conveyor);
+            p.along = j.value("along", p.along);
+            p.side = sideFrom(j.value("side", json()), p.side);
+            p.paddleLength = j.value("paddleLength", p.paddleLength);
+            p.stroke = strokeFrom(j.value("stroke", json()), p.stroke);
+            if (auto ok = checkConveyor(p.conveyor, "pusher " + p.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.pushers.push_back(p);
+        }
+        for (const auto& j : data.value("diverters", json::array())) {
+            DiverterSpec d;
+            d.name = j.value("name", d.name);
+            d.conveyor = j.value("conveyor", d.conveyor);
+            d.along = j.value("along", d.along);
+            d.side = sideFrom(j.value("side", json()), d.side);
+            d.angle = j.value("angle", d.angle);
+            d.stroke = strokeFrom(j.value("stroke", json()), d.stroke);
+            if (auto ok = checkConveyor(d.conveyor, "diverter " + d.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.diverters.push_back(d);
+        }
+        for (const auto& j : data.value("stoppers", json::array())) {
+            StopperSpec s;
+            s.name = j.value("name", s.name);
+            s.conveyor = j.value("conveyor", s.conveyor);
+            s.along = j.value("along", s.along);
+            s.height = j.value("height", s.height);
+            s.stroke = strokeFrom(j.value("stroke", json()), s.stroke);
+            if (auto ok = checkConveyor(s.conveyor, "stopper " + s.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.stoppers.push_back(s);
+        }
+        for (const auto& j : data.value("bins", json::array())) {
+            BinSpec b;
+            b.name = j.value("name", b.name);
+            b.conveyor = j.value("conveyor", b.conveyor);
+            b.along = j.value("along", b.along);
+            b.side = sideFrom(j.value("side", json()), b.side);
+            b.size = vec3From(j.value("size", json()), b.size);
+            if (auto ok = checkConveyor(b.conveyor, "bin " + b.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.bins.push_back(b);
         }
         return scene;
     } catch (const json::exception& error) {

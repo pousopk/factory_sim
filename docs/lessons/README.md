@@ -9,3 +9,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 1. One conveyor in 3D | [01-one-conveyor.md](01-one-conveyor.md) |
 | 2. Sensors | [02-sensors.md](02-sensors.md) |
 | 3. Building the line | [03-building-the-line.md](03-building-the-line.md) |
+| 4. Transfers and actuators | [04-actuators.md](04-actuators.md) |

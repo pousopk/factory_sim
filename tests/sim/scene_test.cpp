@@ -164,3 +164,47 @@ TEST_CASE("Saving replaces the file in one step; loading reads it back") {
     CHECK(*loaded == scene);
     CHECK(loadScene(folder / "missing.json").error().find("can't read") != std::string::npos);
 }
+
+TEST_CASE("Actuators and bins: added at sensible places, saved, removed with their conveyor") {
+    auto scene = defaultScene();
+    const auto pusher = addPusher(scene, 0);
+    const auto bin = addBin(scene, 0);
+    addDiverter(scene, 0);
+    addStopper(scene, 0);
+    CHECK(scene.pushers[pusher].name == "P1");
+    CHECK(scene.bins[bin].side == Side::Right); // across from the pusher, on the left
+    CHECK(scene.bins[bin].along == scene.pushers[pusher].along);
+    scene.pushers[pusher].stroke.extendTime = 0.4;
+
+    const auto loaded = sceneFromJson(sceneToJson(scene));
+    REQUIRE_MESSAGE(loaded.has_value(), (loaded ? "" : loaded.error()));
+    CHECK(*loaded == scene);
+
+    addConveyor(scene);
+    addPusher(scene, 1);
+    removeConveyor(scene, 0);
+    CHECK(scene.diverters.empty());
+    CHECK(scene.stoppers.empty());
+    CHECK(scene.bins.empty());
+    REQUIRE(scene.pushers.size() == 1);
+    CHECK(scene.pushers[0].conveyor == 0); // the second conveyor's, moved down
+}
+
+TEST_CASE("An actuator's timing changes live; its place is the layout") {
+    auto scene = defaultScene();
+    addPusher(scene, 0);
+    auto timing = scene;
+    timing.pushers[0].stroke.extendTime = 1.0;
+    timing.pushers[0].name = "Reject";
+    CHECK(sameLayout(scene, timing));
+    auto moved = scene;
+    moved.pushers[0].along += 0.2F;
+    CHECK_FALSE(sameLayout(scene, moved));
+    auto guided = scene;
+    guided.conveyors[0].spec.guideLeft = true;
+    CHECK_FALSE(sameLayout(scene, guided));
+
+    auto world = buildWorld(scene);
+    applyLive(*world, timing);
+    CHECK(world->pushers()[0].stroke.spec.extendTime == 1.0);
+}

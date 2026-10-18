@@ -91,6 +91,7 @@ add_library(factory_sim_core STATIC
   src/sim/signal.cpp
   src/sim/sensors.cpp
   src/sim/scene.cpp
+  src/sim/actuators.cpp
 )
 target_include_directories(factory_sim_core PUBLIC src)
 target_link_libraries(factory_sim_core

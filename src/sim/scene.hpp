@@ -38,6 +38,10 @@ struct Scene {
     std::vector<PlacedConveyor> conveyors;
     std::vector<PhotocellSpec> photocells;
     std::vector<SpawnerSpec> spawners;
+    std::vector<PusherSpec> pushers;
+    std::vector<DiverterSpec> diverters;
+    std::vector<StopperSpec> stoppers;
+    std::vector<BinSpec> bins;
 
     bool operator==(const Scene&) const = default;
 };
@@ -52,9 +56,10 @@ Scene defaultScene();
 // the chains.
 std::vector<ConveyorSpec> placeConveyors(const Scene& scene);
 
-// Whether two scenes have the same physical layout: the same conveyors in
-// the same places and sizes. If they do, a running world can take the new
-// scene's settings live; if not, the world has to be built again.
+// Whether two scenes have the same physical layout: the same conveyors,
+// actuators and bins, in the same places and sizes. If they do, a running
+// world can take the new scene's settings (speeds, sensors, spawners,
+// actuator timing) live; if not, the world has to be built again.
 bool sameLayout(const Scene& a, const Scene& b);
 
 // A new world for the scene (no boxes yet, time 0).
@@ -81,6 +86,17 @@ void removePhotocell(Scene& scene, std::size_t photocell);
 // A spawner at the start of `conveyor`. Returns its index.
 std::size_t addSpawner(Scene& scene, std::size_t conveyor);
 void removeSpawner(Scene& scene, std::size_t spawner);
+// Actuators and bins on `conveyor`, at a sensible place: a pusher two thirds
+// along on the left, a diverter a third along, a stopper near the end, a bin
+// opposite the last pusher (or halfway, on the right). Each returns its index.
+std::size_t addPusher(Scene& scene, std::size_t conveyor);
+std::size_t addDiverter(Scene& scene, std::size_t conveyor);
+std::size_t addStopper(Scene& scene, std::size_t conveyor);
+std::size_t addBin(Scene& scene, std::size_t conveyor);
+void removePusher(Scene& scene, std::size_t index);
+void removeDiverter(Scene& scene, std::size_t index);
+void removeStopper(Scene& scene, std::size_t index);
+void removeBin(Scene& scene, std::size_t index);
 
 // ---------------------------------------------------------------- Files
 

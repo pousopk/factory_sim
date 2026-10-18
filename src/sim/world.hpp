@@ -1,4 +1,6 @@
 #pragma once
+#include "sim/actuators.hpp"
+#include "sim/conveyor_spec.hpp"
 #include "sim/physics.hpp"
 #include "sim/sensors.hpp"
 #include <cstdint>
@@ -11,28 +13,13 @@
 
 namespace fsim {
 
-// Units everywhere: metres, seconds, kilograms. Y is up; the floor is y = 0.
-
-struct ConveyorSpec {
-    std::string name = "Conveyor";
-    glm::vec3 start{0.0F}; // on the floor, under the start of the belt's centre line
-    float heading = 0.0F;  // direction of travel, radians around Y: 0 = +X, pi/2 = -Z
-    float length = 3.0F;
-    float width = 0.4F;
-    float beltHeight = 0.8F;   // height of the belt surface above the floor
-    float targetSpeed = 0.5F;  // m/s; the belt ramps towards it
-    float acceleration = 1.0F; // m/s², like a VFD's ramp time (0 to 1 m/s in 1 s)
-    EncoderSpec encoder;       // on the drive roller
-
-    bool operator==(const ConveyorSpec&) const = default;
-};
-
 struct Conveyor {
     ConveyorSpec spec;
     float speed = 0.0F;           // the actual belt speed now, m/s
     double travelled = 0.0;       // how far the belt surface has moved in total, m (for the moving stripes)
     double travelledBefore = 0.0; // the same, at the start of the last step
     JPH::BodyID body;
+    std::vector<JPH::BodyID> guides; // its side rails, if it has any
 
     // The encoder's count: whole pulses since the start (negative if the belt ran backwards).
     std::int64_t encoderCount() const;
@@ -67,6 +54,29 @@ struct ItemView {
 // Time advances in fixed steps of exactly 1 ms, whatever the screen's frame
 // rate, so timing effects are real and repeatable: at 2 m/s a box moves
 // exactly 2 mm per step.
+// The actuators as they run: their settings, their stroke, their body.
+struct Pusher {
+    PusherSpec spec;
+    Stroke stroke;
+    JPH::BodyID body;
+};
+struct Diverter {
+    DiverterSpec spec;
+    Stroke stroke;
+    JPH::BodyID body;
+};
+struct Stopper {
+    StopperSpec spec;
+    Stroke stroke;
+    JPH::BodyID body;
+};
+struct Bin {
+    BinSpec spec;
+    std::vector<JPH::BodyID> walls;
+    std::size_t count = 0;      // boxes that landed in it
+    std::vector<ItemId> inside; // the boxes in it now (counted once each)
+};
+
 class World {
 public:
     static constexpr double kStep = 0.001; // seconds per simulation step
@@ -79,12 +89,20 @@ public:
     std::size_t addConveyor(const ConveyorSpec& spec);
     std::size_t addSpawner(const SpawnerSpec& spec);
     std::size_t addPhotocell(const PhotocellSpec& spec);
+    // Actuators and bins sit on an existing conveyor (add it first).
+    std::size_t addPusher(const PusherSpec& spec);
+    std::size_t addDiverter(const DiverterSpec& spec);
+    std::size_t addStopper(const StopperSpec& spec);
+    std::size_t addBin(const BinSpec& spec);
 
     // Replaces the photocells' and spawners' settings while running (an
     // edit in the inspector). A photocell that stays on the same conveyor
     // keeps its state (its output, its triggers); a spawner keeps its timing.
     void setPhotocells(const std::vector<PhotocellSpec>& specs);
     void setSpawners(const std::vector<SpawnerSpec>& specs);
+    // Actuator timing changes while running (their place is the layout: a new world).
+    void setStrokes(const std::vector<PusherSpec>& pushers, const std::vector<DiverterSpec>& diverters,
+                    const std::vector<StopperSpec>& stoppers);
 
     ItemId spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading = 0.0F);
     void removeItem(ItemId id);
@@ -109,6 +127,14 @@ public:
     const std::vector<SpawnerSpec>& spawners() const { return spawners_; }
     std::vector<Photocell>& photocells() { return photocells_; }
     const std::vector<Photocell>& photocells() const { return photocells_; }
+    std::vector<Pusher>& pushers() { return pushers_; }
+    const std::vector<Pusher>& pushers() const { return pushers_; }
+    std::vector<Diverter>& diverters() { return diverters_; }
+    const std::vector<Diverter>& diverters() const { return diverters_; }
+    std::vector<Stopper>& stoppers() { return stoppers_; }
+    const std::vector<Stopper>& stoppers() const { return stoppers_; }
+    std::vector<Bin>& bins() { return bins_; }
+    const std::vector<Bin>& bins() const { return bins_; }
 
     // A conveyor's encoder count at time `t` within the last step (the belt's
     // travel is interpolated between the step's start and end).
@@ -135,6 +161,10 @@ private:
     void updateSpawners();
     void removeFallenItems();
     void updatePhotocells(double stepStart, double stepEnd);
+    void updateActuators(double stepStart, double stepEnd);
+    void updateBins();
+    JPH::BodyID addKinematic(const Pose& pose, float friction);
+    JPH::BodyID addStatic(const Pose& pose, float friction);
 
     Physics physics_;
     std::vector<Conveyor> conveyors_; // before contacts_, which refers to it
@@ -144,6 +174,10 @@ private:
     std::vector<SpawnerState> spawnerStates_;
     std::vector<Item> items_;
     std::vector<Photocell> photocells_;
+    std::vector<Pusher> pushers_;
+    std::vector<Diverter> diverters_;
+    std::vector<Stopper> stoppers_;
+    std::vector<Bin> bins_;
     ItemId nextItemId_ = 1;
     std::uint64_t stepCount_ = 0;
     double pending_ = 0.0;    // time not yet simulated (less than one step)

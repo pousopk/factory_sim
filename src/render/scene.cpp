@@ -16,6 +16,27 @@ const glm::vec3 kBeamColor{1.0F, 0.15F, 0.10F};
 const glm::vec3 kLedOn{1.0F, 0.85F, 0.10F};
 const glm::vec3 kLedOff{0.25F, 0.22F, 0.12F};
 const glm::vec3 kGateColor{0.85F, 0.62F, 0.15F};
+const glm::vec3 kGuideColor{0.85F, 0.80F, 0.30F};
+const glm::vec3 kCylinderColor{0.70F, 0.72F, 0.75F};
+const glm::vec3 kPaddleColor{0.20F, 0.45F, 0.75F};
+const glm::vec3 kArmColor{0.20F, 0.60F, 0.45F};
+const glm::vec3 kBladeColor{0.75F, 0.25F, 0.20F};
+const glm::vec3 kBinColor{0.30F, 0.42F, 0.35F};
+
+DrawBox fromPose(const Pose& pose, glm::vec3 color) {
+    DrawBox box;
+    box.center = pose.center;
+    box.rotation = pose.rotation;
+    box.size = pose.size;
+    box.color = color;
+    return box;
+}
+
+DrawBox led(glm::vec3 center, glm::quat rotation, bool on) {
+    DrawBox box = fromPose(Pose{center, rotation, glm::vec3(0.012F, 0.008F, 0.012F)}, on ? kLedOn : kLedOff);
+    box.unlit = true;
+    return box;
+}
 
 // Gives every box in `parts` an owner, and appends them to `boxes`.
 void addParts(std::vector<DrawBox>& boxes, std::vector<DrawBox> parts, Pick pick, const std::optional<Pick>& selected) {
@@ -55,6 +76,17 @@ std::vector<DrawBox> conveyorBoxes(const Conveyor& conveyor) {
                                 rotation,
                                 {spec.length, kFrameHeight, kFrameWidth},
                                 kFrameColor});
+    }
+
+    // Side guides, where the physics has them: rails along the belt's edges.
+    const auto left = leftOf(along);
+    for (const auto& [wanted, sign] : {std::pair{spec.guideLeft, 1.0F}, std::pair{spec.guideRight, -1.0F}}) {
+        if (wanted) {
+            boxes.push_back(fromPose(Pose{middle + left * sign * (spec.width / 2.0F + kGuideThickness / 2.0F) +
+                                              glm::vec3(0.0F, kGuideHeight / 2.0F, 0.0F),
+                                          rotation, glm::vec3(spec.length, kGuideHeight, kGuideThickness)},
+                                     kGuideColor));
+        }
     }
 
     // Four legs, from the floor to the frame, near the ends.
@@ -97,6 +129,59 @@ std::vector<DrawBox> photocellBoxes(const Photocell& photocell, const Conveyor& 
     return boxes;
 }
 
+std::vector<DrawBox> pusherBoxes(const Pusher& pusher, const ConveyorSpec& conveyor) {
+    const auto paddle = pusherPaddle(pusher.spec, conveyor, pusher.stroke.position());
+    const auto rest = pusherPaddle(pusher.spec, conveyor, 0.0);
+    const auto out = glm::normalize(rest.center - beltPoint(conveyor, pusher.spec.along) -
+                                    glm::vec3(0.0F, rest.center.y - conveyor.beltHeight, 0.0F));
+    // The cylinder stands outside the frame, behind the paddle's rest place.
+    constexpr float cylinderLength = 0.25F;
+    const auto cylinder = rest.center + out * (0.06F + cylinderLength / 2.0F);
+    const auto rotation = paddle.rotation;
+    std::vector<DrawBox> boxes;
+    boxes.push_back(fromPose(Pose{cylinder, rotation, {0.07F, 0.07F, cylinderLength}}, kCylinderColor));
+    // The rod, from the cylinder to the paddle.
+    const auto rodStart = cylinder - out * (cylinderLength / 2.0F);
+    const float rodLength = glm::length(rodStart - paddle.center);
+    boxes.push_back(
+        fromPose(Pose{(rodStart + paddle.center) / 2.0F, rotation, {0.02F, 0.02F, rodLength}}, kCylinderColor));
+    boxes.push_back(fromPose(paddle, kPaddleColor));
+    // The end position sensors' LEDs: retracted at the back, extended at the front.
+    const glm::vec3 up{0.0F, 0.04F, 0.0F};
+    boxes.push_back(
+        led(cylinder + out * (cylinderLength / 2.0F - 0.02F) + up, rotation, pusher.stroke.retracted().value()));
+    boxes.push_back(
+        led(cylinder - out * (cylinderLength / 2.0F - 0.02F) + up, rotation, pusher.stroke.extended().value()));
+    return boxes;
+}
+
+std::vector<DrawBox> diverterBoxes(const Diverter& diverter, const ConveyorSpec& conveyor) {
+    const auto arm = diverterArm(diverter.spec, conveyor, diverter.stroke.position());
+    const auto rest = diverterArm(diverter.spec, conveyor, 0.0);
+    // The pivot: a post at the arm's upstream end, standing on the frame.
+    const auto pivot = rest.center - directionOf(conveyor.heading) * (rest.size.x / 2.0F);
+    std::vector<DrawBox> boxes;
+    boxes.push_back(
+        fromPose(Pose{glm::vec3(pivot.x, conveyor.beltHeight + 0.06F, pivot.z), rest.rotation, {0.05F, 0.12F, 0.05F}},
+                 kCylinderColor));
+    boxes.push_back(fromPose(arm, kArmColor));
+    boxes.push_back(led(glm::vec3(pivot.x, conveyor.beltHeight + 0.125F, pivot.z), rest.rotation,
+                        diverter.stroke.extended().value()));
+    return boxes;
+}
+
+std::vector<DrawBox> stopperBoxes(const Stopper& stopper, const ConveyorSpec& conveyor) {
+    return {fromPose(stopperBlade(stopper.spec, conveyor, stopper.stroke.position()), kBladeColor)};
+}
+
+std::vector<DrawBox> binBoxes(const Bin& bin, const ConveyorSpec& conveyor) {
+    std::vector<DrawBox> boxes;
+    for (const auto& wall : binWalls(bin.spec, conveyor)) {
+        boxes.push_back(fromPose(wall, kBinColor));
+    }
+    return boxes;
+}
+
 std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& conveyor) {
     const auto rotation = glm::angleAxis(conveyor.spec.heading, glm::vec3(0.0F, 1.0F, 0.0F));
     const auto along = conveyor.direction();
@@ -126,6 +211,31 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
         if (photocell.spec.conveyor < conveyors.size()) {
             addParts(boxes, photocellBoxes(photocell, conveyors[photocell.spec.conveyor]),
                      Pick{Pick::Kind::Photocell, i}, selected);
+        }
+    }
+    const auto onConveyor = [&](std::size_t conveyor) { return conveyor < conveyors.size(); };
+    for (std::size_t i = 0; i < world.pushers().size(); ++i) {
+        const auto& a = world.pushers()[i];
+        if (onConveyor(a.spec.conveyor)) {
+            addParts(boxes, pusherBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Pusher, i}, selected);
+        }
+    }
+    for (std::size_t i = 0; i < world.diverters().size(); ++i) {
+        const auto& a = world.diverters()[i];
+        if (onConveyor(a.spec.conveyor)) {
+            addParts(boxes, diverterBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Diverter, i}, selected);
+        }
+    }
+    for (std::size_t i = 0; i < world.stoppers().size(); ++i) {
+        const auto& a = world.stoppers()[i];
+        if (onConveyor(a.spec.conveyor)) {
+            addParts(boxes, stopperBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Stopper, i}, selected);
+        }
+    }
+    for (std::size_t i = 0; i < world.bins().size(); ++i) {
+        const auto& b = world.bins()[i];
+        if (onConveyor(b.spec.conveyor)) {
+            addParts(boxes, binBoxes(b, conveyors[b.spec.conveyor].spec), Pick{Pick::Kind::Bin, i}, selected);
         }
     }
     for (std::size_t i = 0; i < world.spawners().size(); ++i) {

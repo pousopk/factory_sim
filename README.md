@@ -61,7 +61,9 @@ The scene is saved after every change; there's no Save button and the file isn't
 
 **The view:** left drag turns it around the point it looks at, right (or middle) drag moves that point, the wheel zooms. A click selects a conveyor, photocell or spawner; Del deletes it, Esc deselects.
 
-**Building the line** (the **Line** panel): a new conveyor can follow the selected one, straight on or turned left or right; it then starts where the other ends and moves with it. **New conveyor** adds one on its own, beside the others. **Photocell** and **Spawner** go on the selected conveyor. Everything in the line is listed there too, to select.
+**Building the line** (the **Line** panel): a new conveyor can follow the selected one, straight on or turned left or right; it then starts where the other ends and moves with it (a turned one sits 2 cm lower and gets a guide on its far side, so boxes drop onto it and turn). **New conveyor** adds one on its own, beside the others. **Photocell**, **Spawner**, **Pusher**, **Diverter**, **Stopper** and **Bin** go on the selected conveyor. Everything in the line is listed there too, to select.
+
+**Actuators** move like air cylinders: a dead time after the valve switches, then a steady stroke, with end position sensors (the LEDs). A **pusher** pushes boxes off the other side of the belt, into a **bin** that counts them; a **diverter** arm swings out and guides boxes off the other side; a **stopper** blade rises out of the belt and holds boxes back while the belt slides under them. Until milestone 5 adds control logic, they're operated by hand in the inspector: **Extend**, **Retract**, or **Fire once** (out, and back as soon as it's fully out).
 
 **The Inspector** edits the selection: a conveyor's place (or, if it follows another, its turn, and **Detach**), size, speed, ramp and encoder; a photocell's conveyor, position, height, beam, thresholds and response time; a spawner's conveyor, rate, jitter, box size and position. Speeds and sensor settings apply while boxes keep running; changing a conveyor's place or size restarts the run. Ctrl+Z / Ctrl+Y undo and redo; dragging a slider is one step.
 
@@ -73,7 +75,7 @@ The scene is saved after every change; there's no Save button and the file isn't
 
 | Path | Contents |
 |---|---|
-| `src/sim/` | The simulation: Jolt set up for repeatable results (`physics.hpp`), conveyors, items and time (`world.hpp`), photocells and encoders (`sensors.hpp`), signals with exact switching times (`signal.hpp`); the scene, its snapping, editing and file (`scene.hpp`) |
+| `src/sim/` | The simulation: Jolt set up for repeatable results (`physics.hpp`), conveyors, items and time (`world.hpp`), photocells and encoders (`sensors.hpp`), signals with exact switching times (`signal.hpp`), pneumatic actuators and bins (`actuators.hpp`); the scene, its snapping, editing and file (`scene.hpp`) |
 | `src/edit/` | Undo and redo of the scene |
 | `src/render/` | What to draw and what a click hits (`scene.hpp`) and from where (`orbit_camera.hpp`), all plain geometry; the OpenGL renderer and shaders |
 | `src/app/` | The application: window, frame loop, panels |
