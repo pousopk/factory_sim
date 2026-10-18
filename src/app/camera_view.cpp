@@ -68,7 +68,7 @@ void App::drawCameraView() {
         return;
     }
     viewedCamera_ = std::clamp(viewedCamera_, 0, static_cast<int>(cameras.size()) - 1);
-    ImGui::SetNextItemWidth(120.0F);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 9.2F);
     if (ImGui::BeginCombo("camera", cameras[static_cast<std::size_t>(viewedCamera_)].spec.name.c_str())) {
         for (std::size_t i = 0; i < cameras.size(); ++i) {
             if (ImGui::Selectable(cameras[i].spec.name.c_str(), static_cast<int>(i) == viewedCamera_)) {

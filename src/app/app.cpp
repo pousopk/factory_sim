@@ -84,7 +84,11 @@ void App::frame(double realSeconds, int width, int height) {
     handleMouse(width, height);
     handleKeys();
     drawMenuBar();
-    drawMainPanel();
+    drawToolbar();
+    drawStatusBar();
+    drawDockspace();
+    drawControlWindow();
+    drawHelp();
     drawLinePanel();
     drawInspector();
     drawTriggers();
@@ -129,20 +133,32 @@ void App::frame(double realSeconds, int width, int height) {
         stepMilliseconds_ = 0.8 * stepMilliseconds_ + 0.2 * spent / stepsLastFrame_; // smoothed
     }
     behind_ = !paused_ && stepsLastFrame_ == maxSteps;
+    if (realSeconds > 0.0) {
+        const double factor = stepsLastFrame_ * World::kStep / realSeconds;
+        realTimeFactor_ = 0.9 * realTimeFactor_ + 0.1 * factor; // smoothed over about ten frames
+    }
     finishFiring();
-    renderer_.draw(boxesToDraw(), camera_, width, height);
+    // The 3D view fills the dockspace's middle: in framebuffer pixels, with
+    // OpenGL's y going up from the bottom.
+    const auto& io = ImGui::GetIO();
+    const float scaleX = static_cast<float>(width) / std::max(io.DisplaySize.x, 1.0F);
+    const float scaleY = static_cast<float>(height) / std::max(io.DisplaySize.y, 1.0F);
+    const int viewWidth = std::max(1, static_cast<int>(viewSize_.x * scaleX));
+    const int viewHeight = std::max(1, static_cast<int>(viewSize_.y * scaleY));
+    renderer_.draw(boxesToDraw(), camera_, static_cast<int>(viewMin_.x * scaleX),
+                   height - static_cast<int>((viewMin_.y + viewSize_.y) * scaleY), viewWidth, viewHeight);
     if (showNames_) {
-        drawNames(width, height);
+        drawNames();
     }
 }
 
 // Each device's name, at its place in the view: projected through the
 // camera like a vertex, then written by ImGui behind its windows.
-void App::drawNames(int width, int height) {
-    const auto& io = ImGui::GetIO();
-    const float aspect = height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
+void App::drawNames() {
+    const float aspect = viewSize_.y > 0.0F ? viewSize_.x / viewSize_.y : 1.0F;
     const auto viewProjection = camera_.projection(aspect) * camera_.view();
     auto* draw = ImGui::GetBackgroundDrawList();
+    draw->PushClipRect(viewMin_, ImVec2(viewMin_.x + viewSize_.x, viewMin_.y + viewSize_.y));
     for (const auto& label : sceneLabels(drag_ && preview_ ? *preview_ : *world_)) {
         const glm::vec4 clip = viewProjection * glm::vec4(label.position, 1.0F);
         if (clip.w <= 0.01F) {
@@ -154,13 +170,14 @@ void App::drawNames(int width, int height) {
         }
         // In ImGui's window points, y down (the framebuffer may have more pixels).
         const ImVec2 size = ImGui::CalcTextSize(label.text.c_str());
-        const ImVec2 at((ndc.x * 0.5F + 0.5F) * io.DisplaySize.x - size.x / 2.0F,
-                        (0.5F - ndc.y * 0.5F) * io.DisplaySize.y - size.y);
+        const ImVec2 at(viewMin_.x + (ndc.x * 0.5F + 0.5F) * viewSize_.x - size.x / 2.0F,
+                        viewMin_.y + (0.5F - ndc.y * 0.5F) * viewSize_.y - size.y);
         const bool selected = selected_ == label.pick;
         draw->AddRectFilled(ImVec2(at.x - 3.0F, at.y - 1.0F), ImVec2(at.x + size.x + 3.0F, at.y + size.y + 1.0F),
                             selected ? IM_COL32(40, 90, 170, 200) : IM_COL32(0, 0, 0, 120), 3.0F);
         draw->AddText(at, IM_COL32(235, 238, 245, 255), label.text.c_str());
     }
+    draw->PopClipRect();
 }
 
 void App::followScene() {
@@ -252,7 +269,14 @@ void App::handleKeys() {
         copySelection();
         pasteClip(std::nullopt);
     }
+    if (ImGui::IsKeyPressed(ImGuiKey_Space, false)) {
+        paused_ = !paused_;
+    }
+    if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
+        showHelp_ = !showHelp_;
+    }
     if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R)) {
+
         turnSelection(io.KeyShift ? -1.0F : 1.0F);
     }
 }
@@ -351,85 +375,6 @@ void App::keepSelectionValid() {
 }
 
 // ---------------------------------------------------------------- Panels
-
-void App::drawMainPanel() {
-    ImGui::SetNextWindowPos(ImVec2(10, 32), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("factory_sim");
-
-    ImGui::SeparatorText("Simulation");
-    ImGui::Text("Time %.3f s", world_->time());
-    ImGui::SameLine();
-    ImGui::TextColored(kDim, "(%llu steps of 1 ms)", static_cast<unsigned long long>(world_->stepCount()));
-    if (ImGui::Button(paused_ ? "Run" : "Pause")) {
-        paused_ = !paused_;
-    }
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!paused_);
-    if (ImGui::Button("Step 1 ms")) {
-        world_->step();
-    }
-    ImGui::SameLine();
-    if (ImGui::Button("Step 100 ms")) {
-        world_->run(0.1);
-    }
-    ImGui::EndDisabled();
-    ImGui::SetNextItemWidth(kFieldWidth);
-    ImGui::SliderFloat("time scale", &timeScale_, 0.05F, 2.0F, "%.2fx", ImGuiSliderFlags_Logarithmic);
-    ImGui::SetItemTooltip("How fast simulated time runs compared with real time.\n"
-                          "The physics is the same at any scale: always 1 ms steps.");
-    ImGui::TextColored(kDim, "%d steps this frame, %.1f ms per frame", stepsLastFrame_, frameSeconds_ * 1000.0);
-    if (behind_) {
-        ImGui::TextColored(kProblem, "behind: simulating at most %.0f ms per frame (%.2f ms a step, %d threads)", 25.0,
-                           stepMilliseconds_, world_->physicsThreads());
-        ImGui::SetItemTooltip("The line is too busy to simulate in real time: it runs slower instead.\n"
-                              "The physics is the same, only slower than the clock on the wall.");
-    }
-    const auto& drawn = renderer_.stats();
-    ImGui::TextColored(kDim, "drawing: %zu boxes, %d draw calls, CPU %.2f ms, GPU %.2f ms", drawn.boxes,
-                       drawn.drawCalls, drawn.cpuMilliseconds, drawn.gpuMilliseconds);
-    ImGui::SetItemTooltip("CPU: handing the frame to OpenGL. GPU: drawing it (a timer query, a frame late).");
-    ImGui::Text("%zu boxes", world_->itemCount());
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Clear boxes")) {
-        world_->clearItems();
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Restart")) {
-        restartRun();
-    }
-    ImGui::SetItemTooltip("Start the run again: no boxes, time 0. (A change to the layout does this too.)");
-
-    drawControl();
-
-    ImGui::SeparatorText("Scene");
-    ImGui::BeginDisabled(!history_.canUndo());
-    if (ImGui::Button("Undo")) {
-        history_.undo();
-    }
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Ctrl+Z");
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!history_.canRedo());
-    if (ImGui::Button("Redo")) {
-        history_.redo();
-    }
-    ImGui::EndDisabled();
-    ImGui::SetItemTooltip("Ctrl+Y");
-    ImGui::SameLine();
-    ImGui::TextColored(kDim, "saved after every change");
-    ImGui::PushTextWrapPos(0.0F);
-    ImGui::TextColored(fileStatus_.find("can't") != std::string::npos || fileStatus_.find("isn't") != std::string::npos
-                           ? kProblem
-                           : kDim,
-                       "%s", fileStatus_.empty() ? savePath().string().c_str() : fileStatus_.c_str());
-    ImGui::PopTextWrapPos();
-
-    ImGui::SeparatorText("Camera");
-    ImGui::TextColored(kDim,
-                       "Left drag: turn. Right drag: move. Wheel: zoom.\nClick: select. Del: delete. Esc: deselect.");
-    ImGui::End();
-}
 
 // Everything in the line, to select, and buttons to add and remove things.
 void App::drawLinePanel() {
@@ -642,14 +587,14 @@ void App::drawConveyorInspector(std::size_t index) {
     auto& s = scene();
     auto& placed = s.conveyors[index];
     auto& spec = placed.spec;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
 
     ImGui::SeparatorText("Place");
     if (placed.follows && *placed.follows < s.conveyors.size()) {
         ImGui::Text("After %s, %s", s.conveyors[*placed.follows].spec.name.c_str(), turnName(placed.turn));
         int turn = static_cast<int>(placed.turn);
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         if (ImGui::Combo("turn", &turn, "straight on\0turned left\0turned right\0")) {
             placed.turn = static_cast<Turn>(turn);
         }
@@ -665,7 +610,7 @@ void App::drawConveyorInspector(std::size_t index) {
     } else if (placed.joins && *placed.joins < s.conveyors.size()) {
         ImGui::Text("Joins %s from the %s", s.conveyors[*placed.joins].spec.name.c_str(),
                     placed.joinSide == Side::Left ? "left" : "right");
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::SliderFloat("at", &placed.joinAt, 0.0F, s.conveyors[*placed.joins].spec.length, "%.2f m along it");
         if (ImGui::SmallButton("Detach")) {
             const auto where = placeConveyors(s)[index];
@@ -676,12 +621,12 @@ void App::drawConveyorInspector(std::size_t index) {
         }
         ImGui::SetItemTooltip("Keep it where it is, but no longer attached to the conveyor it joins");
     } else {
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::DragFloat("start x", &spec.start.x, 0.01F, -50.0F, 50.0F, "%.3f m");
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::DragFloat("start z", &spec.start.z, 0.01F, -50.0F, 50.0F, "%.3f m");
         float degrees = spec.heading * kDegrees;
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         if (ImGui::SliderFloat("heading", &degrees, -180.0F, 180.0F, "%.0f deg")) {
             spec.heading = degrees / kDegrees;
         }
@@ -695,11 +640,11 @@ void App::drawConveyorInspector(std::size_t index) {
         "Rails along the belt's edges that keep boxes on it (left and right looking along the travel)");
 
     ImGui::SeparatorText("Size");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("length", &spec.length, 0.5F, 10.0F, "%.2f m");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("width", &spec.width, 0.15F, 1.2F, "%.2f m");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("belt height", &spec.beltHeight, 0.3F, 1.5F, "%.2f m");
     ImGui::TextColored(kDim, "Changing the place or size restarts the run.");
 
@@ -708,15 +653,15 @@ void App::drawConveyorInspector(std::size_t index) {
         ImGui::TextColored(kDim, "With a drive, the PLC sets the speed: the target speed is only\n"
                                  "used without a control program, and the run output not at all.");
     }
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("target speed", &spec.targetSpeed, 0.0F, 3.0F, "%.2f m/s");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("acceleration", &spec.acceleration, 0.1F, 10.0F, "%.1f m/s²", ImGuiSliderFlags_Logarithmic);
     ImGui::SetItemTooltip("Like a VFD's ramp: 1 m/s² takes 1 s from 0 to 1 m/s.");
     if (index < world_->conveyors().size()) {
         const auto& running = world_->conveyors()[index];
         const float fraction = spec.targetSpeed > 0.0F ? running.speed / spec.targetSpeed : 0.0F;
-        ImGui::ProgressBar(std::clamp(fraction, 0.0F, 1.0F), ImVec2(kFieldWidth, 0.0F), "");
+        ImGui::ProgressBar(std::clamp(fraction, 0.0F, 1.0F), ImVec2(fieldWidth(), 0.0F), "");
         ImGui::SameLine();
         ImGui::Text("%.3f m/s", running.speed);
         ImGui::TextColored(kDim, "at this speed a box moves %.2f mm per 1 ms step", running.speed); // m/s = mm/ms
@@ -742,9 +687,9 @@ void App::drawConveyorInspector(std::size_t index) {
     }
 
     ImGui::SeparatorText("Encoder");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderInt("pulses/rev", &spec.encoder.pulsesPerRevolution, 100, 5000);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("roller", &spec.encoder.rollerDiameter, 0.02F, 0.2F, "%.3f m");
     const double perMetre = spec.encoder.pulsesPerMetre();
     if (index < world_->conveyors().size()) {
@@ -768,7 +713,7 @@ void App::drawPhotocellInspector(std::size_t index) {
         ImGui::SameLine();
         ImGui::TextColored(kDim, "  beam %.0f %% covered", running.covered * 100.0F);
     }
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     addressField("input", spec.input, IoAddress::Area::Input, IoAddress::Size::Bit);
     ImGui::Checkbox("sees only bad (NOK) boxes", &spec.onlyNok);
@@ -776,9 +721,9 @@ void App::drawPhotocellInspector(std::size_t index) {
                           "whose output says \"this one is bad\".");
     conveyorCombo("on conveyor", spec.conveyor, s);
     const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("height", &spec.height, 0.005F, 0.3F, "%.3f m above belt");
     scaledSlider("response", spec.responseTime, 1000.0, 0.0F, 20.0F, "%.2f ms");
     ImGui::SetItemTooltip("From the beam being blocked to the output switching.\n"
@@ -803,14 +748,14 @@ void App::drawSpawnerInspector(std::size_t index) {
     scaledSlider("every", spawner.interval, 1.0, 0.2F, 5.0F, "%.2f s");
     scaledSlider("jitter", spawner.intervalJitter, 1.0, 0.0F, 1.0F, "± %.2f s");
     int shape = spawner.shape == Shape::Tin ? 1 : 0;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("makes", &shape, "boxes\0tins\0")) {
         spawner.shape = shape == 1 ? Shape::Tin : Shape::Box;
     }
     ImGui::Checkbox("arriving at belt speed", &spawner.atBeltSpeed);
     ImGui::SetItemTooltip("As from an infeed conveyor. Off: put down standing still, so the belt has to\n"
                           "speed them up first, and the spawner waits until there's room.");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (spawner.shape == Shape::Tin) {
         float size[2] = {spawner.size.x, spawner.size.y};
         if (ImGui::SliderFloat2("size", size, 0.02F, 0.35F, "%.3f m")) {
@@ -822,7 +767,7 @@ void App::drawSpawnerInspector(std::size_t index) {
         ImGui::SetItemTooltip("Length along the belt, height, width");
     }
     const float length = spawner.conveyor < s.conveyors.size() ? s.conveyors[spawner.conveyor].spec.length : 1.0F;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("where", &spawner.offset, 0.0F, length, "%.2f m from the start");
     if (spawner.conveyor < s.conveyors.size()) {
         const float speed = s.conveyors[spawner.conveyor].spec.targetSpeed;
@@ -857,7 +802,7 @@ void App::drawTriggers() {
     ImGui::Begin("Triggers", &showTriggers_);
     ImGui::Text("%s", photocell.spec.name.c_str());
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(140.0F);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.8F);
     ImGui::SliderFloat("PLC scan", &scanMilliseconds_, 1.0F, 50.0F, "%.0f ms");
     ImGui::SetItemTooltip("A PLC reads its inputs once per cycle: the trigger reaches the program\n"
                           "at the next cycle start after the output switches.");
@@ -905,7 +850,7 @@ void led(const char* label, bool on) {
 
 void sideCombo(Side& side) {
     int value = side == Side::Left ? 0 : 1;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("side", &value, "left\0right\0")) {
         side = value == 0 ? Side::Left : Side::Right;
     }
@@ -955,7 +900,7 @@ void App::drawStrokeControls(Stroke& stroke, Pick pick) {
     led("##extended", stroke.extended().value());
     ImGui::SameLine();
     ImGui::TextUnformatted("extended");
-    ImGui::ProgressBar(static_cast<float>(stroke.position()), ImVec2(kFieldWidth, 0.0F), "");
+    ImGui::ProgressBar(static_cast<float>(stroke.position()), ImVec2(fieldWidth(), 0.0F), "");
     ImGui::SameLine();
     ImGui::TextColored(kDim, "stroke");
     if (world_->program() != nullptr) {
@@ -987,14 +932,14 @@ void App::finishFiring() {
 void App::drawPusherInspector(std::size_t index) {
     auto& s = scene();
     auto& spec = s.pushers[index];
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     conveyorCombo("on conveyor", spec.conveyor, s);
     const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
     sideCombo(spec.side);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("paddle", &spec.paddleLength, 0.05F, 1.0F, "%.2f m long");
     strokeTimes(spec.stroke);
     ioFields(spec);
@@ -1007,11 +952,11 @@ void App::drawPusherInspector(std::size_t index) {
 void App::drawDiverterInspector(std::size_t index) {
     auto& s = scene();
     auto& spec = s.diverters[index];
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     conveyorCombo("on conveyor", spec.conveyor, s);
     const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("pivot at", &spec.along, 0.0F, length, "%.3f m");
     sideCombo(spec.side);
     scaledSlider("angle", spec.angle, kDegrees, 15.0F, 70.0F, "%.0f deg");
@@ -1026,11 +971,11 @@ void App::drawDiverterInspector(std::size_t index) {
 void App::drawStopperInspector(std::size_t index) {
     auto& s = scene();
     auto& spec = s.stoppers[index];
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     conveyorCombo("on conveyor", spec.conveyor, s);
     const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
     scaledSlider("rises", spec.height, 1000.0F, 10.0F, 150.0F, "%.0f mm above the belt");
     strokeTimes(spec.stroke);
@@ -1044,14 +989,14 @@ void App::drawStopperInspector(std::size_t index) {
 void App::drawBinInspector(std::size_t index) {
     auto& s = scene();
     auto& spec = s.bins[index];
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     conveyorCombo("beside conveyor", spec.conveyor, s);
     const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
     sideCombo(spec.side);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat3("size", &spec.size.x, 0.2F, 1.0F, "%.2f m");
     ImGui::SetItemTooltip("Along the belt, height, out from the belt");
     if (index < world_->bins().size()) {
@@ -1068,11 +1013,10 @@ void App::drawBinInspector(std::size_t index) {
 // ---------------------------------------------------------------- Control
 
 void App::drawControl() {
-    ImGui::SeparatorText("Control");
     auto& s = scene();
     // In the order of the enum.
     int control = static_cast<int>(s.control);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("program", &control,
                      "none (by hand)\0built-in sorting\0soft_plc (lockstep)\0S7 PLC (live)\0"
                      "built-in camera triggering\0")) {
@@ -1109,14 +1053,14 @@ void App::drawControl() {
                                                            status[i].fired, status[i].waiting)
                                              : sorter.name + "###sorter";
         if (ImGui::TreeNode(label.c_str())) {
-            ImGui::SetNextItemWidth(kFieldWidth);
+            ImGui::SetNextItemWidth(fieldWidth());
             ImGui::InputText("name", &sorter.name);
             addressField("NOK sensor", sorter.nokInput, IoAddress::Area::Input, IoAddress::Size::Bit);
             addressField("encoder count", sorter.encoderInput, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
             addressField("valve", sorter.valveOutput, IoAddress::Area::Output, IoAddress::Size::Bit);
             addressField("extended", sorter.extendedInput, IoAddress::Area::Input, IoAddress::Size::Bit);
             int distance = static_cast<int>(sorter.distance);
-            ImGui::SetNextItemWidth(kFieldWidth);
+            ImGui::SetNextItemWidth(fieldWidth());
             if (ImGui::DragInt("distance", &distance, 10.0F, 0, 1000000, "%d pulses")) {
                 sorter.distance = distance;
             }
@@ -1137,7 +1081,7 @@ void App::drawControl() {
     if (!s.photocells.empty() && !s.pushers.empty()) {
         sensor = std::clamp(sensor, 0, static_cast<int>(s.photocells.size()) - 1);
         pusher = std::clamp(pusher, 0, static_cast<int>(s.pushers.size()) - 1);
-        ImGui::SetNextItemWidth(90.0F);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
         if (ImGui::BeginCombo("##sensor", s.photocells[static_cast<std::size_t>(sensor)].name.c_str())) {
             for (std::size_t i = 0; i < s.photocells.size(); ++i) {
                 if (ImGui::Selectable(s.photocells[i].name.c_str(), static_cast<int>(i) == sensor)) {
@@ -1147,7 +1091,7 @@ void App::drawControl() {
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(90.0F);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
         if (ImGui::BeginCombo("##pusher", s.pushers[static_cast<std::size_t>(pusher)].name.c_str())) {
             for (std::size_t i = 0; i < s.pushers.size(); ++i) {
                 if (ImGui::Selectable(s.pushers[i].name.c_str(), static_cast<int>(i) == pusher)) {
@@ -1239,8 +1183,8 @@ void App::drawIoTable() {
     });
     if (ImGui::BeginTable("io", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("address", ImGuiTableColumnFlags_WidthFixed, 70.0F);
-        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 80.0F); // 16#047F fits
+        ImGui::TableSetupColumn("address", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5.4F);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6.2F); // 16#047F fits
         ImGui::TableSetupColumn("what");
         ImGui::TableHeadersRow();
         for (const auto& row : rows) {
@@ -1279,7 +1223,7 @@ void App::drawControlPanel() {
     }
     ImGui::SetNextWindowPos(ImVec2(360, 792), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(560, 120), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Control panel", &showControlPanel_);
+    ImGui::Begin("Operator panel", &showControlPanel_);
     auto& s = scene();
     for (std::size_t i = 0; i < world_->buttons().size(); ++i) {
         const auto& button = world_->buttons()[i];
@@ -1301,7 +1245,7 @@ void App::drawControlPanel() {
     for (std::size_t i = 0; i < world_->potentiometers().size(); ++i) {
         ImGui::PushID(500 + static_cast<int>(i));
         int value = world_->potentiometer(i);
-        ImGui::SetNextItemWidth(220.0F);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.9F);
         if (ImGui::SliderInt(world_->potentiometers()[i].name.c_str(), &value, 0, kAnalogFullScale, "%d")) {
             world_->turn(i, value);
         }
@@ -1331,10 +1275,10 @@ void App::drawControlPanel() {
         for (std::size_t i = 0; i < s.buttons.size(); ++i) {
             auto& b = s.buttons[i];
             ImGui::PushID(2000 + static_cast<int>(i));
-            ImGui::SetNextItemWidth(90.0F);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
             ImGui::InputText("##name", &b.name);
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(70.0F);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.4F);
             ImGui::InputText("##address", &b.address);
             ImGui::SameLine();
             ImGui::Checkbox("NC", &b.normallyClosed);
@@ -1354,10 +1298,10 @@ void App::drawControlPanel() {
         for (std::size_t i = 0; i < s.lamps.size(); ++i) {
             auto& l = s.lamps[i];
             ImGui::PushID(3000 + static_cast<int>(i));
-            ImGui::SetNextItemWidth(90.0F);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
             ImGui::InputText("##name", &l.name);
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(70.0F);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.4F);
             ImGui::InputText("##address", &l.address);
             ImGui::SameLine();
             ImGui::TextColored(kDim, "lamp");
@@ -1374,10 +1318,10 @@ void App::drawControlPanel() {
         for (std::size_t i = 0; i < s.potentiometers.size(); ++i) {
             auto& p = s.potentiometers[i];
             ImGui::PushID(4000 + static_cast<int>(i));
-            ImGui::SetNextItemWidth(90.0F);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
             ImGui::InputText("##name", &p.name);
             ImGui::SameLine();
-            ImGui::SetNextItemWidth(70.0F);
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 5.4F);
             ImGui::InputText("##address", &p.address);
             ImGui::SameLine();
             ImGui::TextColored(kDim, "potentiometer (input word)");
@@ -1415,11 +1359,11 @@ void App::drawControlPanel() {
 void App::drawPlcStatus() {
     auto& s = scene();
     if (s.control == Control::SoftPlc) {
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::InputTextWithHint("ST file", "conveyor.st", &s.plcProgram);
         ImGui::SetItemTooltip("The Structured Text soft_plc runs (ladder_editor's Export ST writes one).\n"
                               "A relative path is relative to the scene file's folder.");
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::InputInt("monitor port", &s.monitorPort, 0);
         s.monitorPort = std::clamp(s.monitorPort, 0, 65535);
         ImGui::SetItemTooltip("0: none. Otherwise ladder_editor --connect=PORT (or soft_plc_monitor) goes online\n"
@@ -1446,13 +1390,13 @@ void App::drawPlcStatus() {
             }
         }
     } else {
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::InputText("host", &s.s7Host);
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::InputInt("S7 port", &s.s7Port, 0);
         s.s7Port = std::clamp(s.s7Port, 1, 65535);
         ImGui::SetItemTooltip("102 for a real S7; soft_plc --s7=PORT for another (no rights needed above 1023)");
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::SliderInt("bytes", &s.s7Bytes, 2, static_cast<int>(IoImage::kBytes));
         ImGui::SetItemTooltip("How many input and output bytes to exchange each scan. soft_plc --s7 has 16;\n"
                               "a real S7 has far more. Addresses past them don't reach the PLC.");
@@ -1490,8 +1434,8 @@ void App::drawPlcVariables() {
     if (ImGui::BeginTable("variables", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("variable");
-        ImGui::TableSetupColumn("type", ImGuiTableColumnFlags_WidthFixed, 45.0F);
-        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 80.0F);
+        ImGui::TableSetupColumn("type", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 3.5F);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6.2F);
         ImGui::TableHeadersRow();
         for (const auto& variable : plc->variables()) {
             if (!variableFilter_.empty() && variable.path.find(variableFilter_) == std::string::npos) {

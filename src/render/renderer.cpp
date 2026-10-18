@@ -592,7 +592,7 @@ Renderer::~Renderer() {
     glDeleteVertexArrays(1, &floorArray_);
 }
 
-void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera, int width, int height) {
+void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera, int x, int y, int width, int height) {
     const auto started = std::chrono::steady_clock::now();
     // The GPU's time for the frame before last: its query is done by now.
     const GLuint measuring = timer_[frame_ % 2];
@@ -606,7 +606,7 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
     stats_.drawCalls = 0;
     stats_.boxes = boxes.size();
     const float aspect = height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
-    render(boxes, camera.projection(aspect) * camera.view(), camera.position(), 0, width, height);
+    render(boxes, camera.projection(aspect) * camera.view(), camera.position(), 0, width, height, x, y);
     glEndQuery(GL_TIME_ELAPSED);
     ++frame_;
     stats_.cpuMilliseconds =
@@ -614,7 +614,7 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
 }
 
 void Renderer::render(const std::vector<DrawBox>& boxes, const glm::mat4& viewProjection, glm::vec3 eye,
-                      GLuint framebuffer, int width, int height) {
+                      GLuint framebuffer, int width, int height, int x, int y) {
     // The boxes as instance records, in four groups: solid cubes, solid
     // cylinders, then the see-through ones (drawn last, over the rest).
     std::vector<Instance> instances;
@@ -686,7 +686,7 @@ void Renderer::render(const std::vector<DrawBox>& boxes, const glm::mat4& viewPr
     }
 
     glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
-    glViewport(0, 0, width, height);
+    glViewport(x, y, width, height);
     glClearColor(0.55F, 0.62F, 0.70F, 1.0F); // a pale sky
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
     glEnable(GL_DEPTH_TEST);

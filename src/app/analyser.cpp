@@ -52,7 +52,7 @@ void App::drawAnalyser() {
 // measure the time between any two moments.
 void App::drawTimelines() {
     const auto now = world_->time();
-    ImGui::SetNextItemWidth(140.0F);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.8F);
     ImGui::SliderFloat("span", &analyserSeconds_, 0.1F, 60.0F, "%.1f s", ImGuiSliderFlags_Logarithmic);
     ImGui::SameLine();
     ImGui::Checkbox("follow", &followTime_);
@@ -223,7 +223,7 @@ void App::drawHistograms() {
         return;
     }
     histogramPhotocell_ = std::clamp(histogramPhotocell_, 0, static_cast<int>(photocells.size()) - 1);
-    ImGui::SetNextItemWidth(140.0F);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.8F);
     if (ImGui::BeginCombo("photocell", photocells[static_cast<std::size_t>(histogramPhotocell_)].spec.name.c_str())) {
         for (std::size_t i = 0; i < photocells.size(); ++i) {
             if (ImGui::Selectable(photocells[i].spec.name.c_str(), static_cast<int>(i) == histogramPhotocell_)) {
@@ -233,7 +233,7 @@ void App::drawHistograms() {
         ImGui::EndCombo();
     }
     ImGui::SameLine();
-    ImGui::SetNextItemWidth(140.0F);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.8F);
     ImGui::SliderFloat("PLC scan", &scanMilliseconds_, 1.0F, 50.0F, "%.0f ms");
     const auto& photocell = photocells[static_cast<std::size_t>(histogramPhotocell_)];
     const auto own = positionErrors(photocell);
@@ -276,7 +276,7 @@ void App::drawHistograms() {
 // Every switch of every signal, newest first, and saved as CSV.
 void App::drawEventLog() {
     const auto log = eventLog(traces(*world_));
-    ImGui::SetNextItemWidth(200.0F);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 15.4F);
     ImGui::InputTextWithHint("##filter", "filter: part of a name", &eventFilter_);
     ImGui::SameLine();
     if (ImGui::SmallButton("Export CSV")) {
@@ -291,10 +291,10 @@ void App::drawEventLog() {
     ImGui::TextColored(kDim, "%s", exportStatus_.c_str());
     if (ImGui::BeginTable("events", 4, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("time (s)", ImGuiTableColumnFlags_WidthFixed, 90.0F);
+        ImGui::TableSetupColumn("time (s)", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 6.9F);
         ImGui::TableSetupColumn("signal");
-        ImGui::TableSetupColumn("address", ImGuiTableColumnFlags_WidthFixed, 70.0F);
-        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 45.0F);
+        ImGui::TableSetupColumn("address", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 5.4F);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 3.5F);
         ImGui::TableHeadersRow();
         int rows = 0;
         for (auto it = log.rbegin(); it != log.rend() && rows < 2000; ++it) {

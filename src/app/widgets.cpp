@@ -6,7 +6,7 @@ namespace fsim {
 // A float slider whose value is stored in another unit (ms shown, s stored).
 bool scaledSlider(const char* label, double& value, double scale, float min, float max, const char* format) {
     float shown = static_cast<float>(value * scale);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::SliderFloat(label, &shown, min, max, format)) {
         value = shown / scale;
         return true;
@@ -29,7 +29,7 @@ void addressField(const char* label, std::string& text, IoAddress::Area area, Io
     if (!ok) {
         ImGui::PushStyleColor(ImGuiCol_Text, kProblem);
     }
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     const bool input = area == IoAddress::Area::Input;
     const char* hint = size == IoAddress::Size::Bit    ? (input ? "%IX0.0" : "%QX0.0")
                        : size == IoAddress::Size::Word ? (input ? "%IW12" : "%QW12")
@@ -46,7 +46,7 @@ void addressField(const char* label, std::string& text, IoAddress::Area area, Io
 
 // A combo to pick one of the scene's conveyors, by name.
 void conveyorCombo(const char* label, std::size_t& conveyor, const Scene& scene) {
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     const auto current = conveyor < scene.conveyors.size() ? scene.conveyors[conveyor].spec.name : std::string("?");
     if (ImGui::BeginCombo(label, current.c_str())) {
         for (std::size_t i = 0; i < scene.conveyors.size(); ++i) {

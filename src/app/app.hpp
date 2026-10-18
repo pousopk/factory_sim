@@ -11,6 +11,7 @@
 #include "sim/world.hpp"
 #include <filesystem>
 #include <future>
+#include <imgui.h>
 #include <memory>
 #include <optional>
 #include <set>
@@ -72,9 +73,15 @@ private:
     bool canDrag(Pick pick) const; // a device on a belt, or a conveyor standing on its own
     std::vector<DrawBox> boxesToDraw();
     std::optional<OrbitCamera::Ray> mouseRay(int width, int height) const;
-    void drawNames(int width, int height); // the devices' names, over the 3D view
+    void drawNames(); // the devices' names, over the 3D view
     void handleKeys();
-    void drawMainPanel();
+    // The window's layout (layout.cpp): toolbar, status bar, the dockspace
+    // around the 3D view, the Control panel, the keys.
+    void drawDockspace();
+    void drawToolbar();
+    void drawStatusBar();
+    void drawControlWindow();
+    void drawHelp();
     void drawLinePanel();
     void drawInspector();
     void drawConveyorInspector(std::size_t index);
@@ -189,6 +196,12 @@ private:
     double stepMilliseconds_ = 0.1; // what a simulation step has cost lately (real time)
     bool behind_ = false;           // the last frame ran out of time for the simulation
     bool showNames_ = true;         // device names over the view (View menu)
+    bool showControl_ = true;
+    bool showHelp_ = false;
+    bool resetLayout_ = false;   // View > Reset layout: the default arrangement next frame
+    ImVec2 viewMin_{0.0F, 0.0F}; // the 3D view: the dockspace's middle, in window points
+    ImVec2 viewSize_{1.0F, 1.0F};
+    double realTimeFactor_ = 1.0; // simulated seconds per real second, smoothed
 
     // Editing in the view. A drag holds what's dragged and where it was
     // grabbed; meanwhile the scene changes but the world doesn't follow (a

@@ -13,11 +13,11 @@ std::optional<OrbitCamera::Ray> App::mouseRay(int width, int height) const {
     if (!ImGui::IsMousePosValid()) {
         return std::nullopt;
     }
-    // ImGui's mouse is in window points; the framebuffer may have more pixels (HiDPI).
-    const float scaleX = static_cast<float>(width) / std::max(io.DisplaySize.x, 1.0F);
-    const float scaleY = static_cast<float>(height) / std::max(io.DisplaySize.y, 1.0F);
-    return camera_.rayThrough(io.MousePos.x * scaleX, io.MousePos.y * scaleY, static_cast<float>(width),
-                              static_cast<float>(height));
+    // Relative to the 3D view (the dockspace's middle), in window points: the
+    // ray only needs the proportions, so the framebuffer's pixels don't matter.
+    (void)width;
+    (void)height;
+    return camera_.rayThrough(io.MousePos.x - viewMin_.x, io.MousePos.y - viewMin_.y, viewSize_.x, viewSize_.y);
 }
 
 bool App::canDrag(Pick pick) const {

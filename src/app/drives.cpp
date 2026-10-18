@@ -92,9 +92,9 @@ void App::drawDrive(std::size_t index) {
     }
     scaledSlider("reference speed", drive.referenceSpeed, 1.0F, 0.1F, 3.0F, "%.2f m/s = 100 %%");
     ImGui::SetItemTooltip("The belt speed at 16#4000 (100 %%) in NSOLL_A and NIST_A");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("quick stop (OFF3)", &drive.quickStop, 0.5F, 20.0F, "%.1f m/s²", ImGuiSliderFlags_Logarithmic);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("coasting", &drive.coast, 0.1F, 10.0F, "%.1f m/s²", ImGuiSliderFlags_Logarithmic);
     ImGui::SetItemTooltip("How fast the loaded belt slows down by itself with the motor off (OFF2, a fault)");
     ImGui::TextColored(kDim, "The ramp is the conveyor's acceleration.");

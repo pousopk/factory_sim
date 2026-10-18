@@ -70,7 +70,9 @@ public:
     Renderer& operator=(const Renderer&) = delete;
 
     // Draws into the current framebuffer of `width` x `height` pixels.
-    void draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera, int width, int height);
+    // In the window's framebuffer, the rectangle at (x, y) (from its bottom
+    // left, as OpenGL counts) of `width` x `height` pixels.
+    void draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera, int x, int y, int width, int height);
 
     // Draws what a camera sees into `picture` (sized `width` x `height`): the
     // scene once for each of `moments` (the boxes as they were at moments
@@ -95,7 +97,7 @@ public:
 private:
     // The scene into `framebuffer` (0: the window), with its shadow pass.
     void render(const std::vector<DrawBox>& boxes, const glm::mat4& viewProjection, glm::vec3 eye, GLuint framebuffer,
-                int width, int height);
+                int width, int height, int x = 0, int y = 0);
 
     Stats stats_;
     Shader accumulate_;        // adds one render, weighted, to the sum

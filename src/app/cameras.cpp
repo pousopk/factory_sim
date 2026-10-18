@@ -56,18 +56,18 @@ void App::drawCameraInspector(std::size_t index) {
             world_->triggerCamera(index);
         }
     }
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     conveyorCombo("over conveyor", spec.conveyor, s);
     const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("looks at", &spec.along, 0.0F, length, "%.3f m");
     ImGui::SetItemTooltip("The middle of its picture, along the belt");
     scaledSlider("from", spec.tilt, kDegrees, -80.0F, 80.0F, "%.0f deg");
     ImGui::SetItemTooltip(
         "0: straight down; positive from the left, negative from the right (looking along the travel)");
     int kind = spec.kind == CameraKind::Line ? 1 : 0;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("kind", &kind, "area (pictures)\0line scan (lines)\0")) {
         spec.kind = kind == 1 ? CameraKind::Line : CameraKind::Area;
     }
@@ -76,10 +76,10 @@ void App::drawCameraInspector(std::size_t index) {
         return;
     }
     scaledSlider("field of view", spec.fieldOfView, 1000.0F, 20.0F, 600.0F, "%.0f mm");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderInt("pixels", &spec.pixels, 320, 5000);
     ImGui::SetItemTooltip("Along the travel");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderInt("pixels across", &spec.pixelsAcross, 240, 5000);
     scaledSlider("working distance", spec.workingDistance, 1000.0F, 50.0F, 2000.0F, "%.0f mm");
     ImGui::SetItemTooltip("From the lens to the belt: with the field of view, it sets the lens angle");
@@ -120,10 +120,10 @@ void App::drawCameraInspector(std::size_t index) {
 void App::drawLineCameraSettings(CameraSpec& spec) {
     const auto& s = scene();
     scaledSlider("line width", spec.lineWidth, 1000.0F, 20.0F, 2000.0F, "%.0f mm across");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderInt("pixels", &spec.pixelsAcross, 64, 4096);
     int trigger = spec.lineTrigger == LineTrigger::Encoder ? 1 : 0;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("each line", &trigger, "at a fixed rate\0from the encoder\0")) {
         spec.lineTrigger = trigger == 1 ? LineTrigger::Encoder : LineTrigger::FreeRun;
     }
@@ -137,7 +137,7 @@ void App::drawLineCameraSettings(CameraSpec& spec) {
         alongPixel = speed / spec.lineRate;
         ImGui::TextColored(kDim, "for square pixels at %.2f m/s: %.2f kHz", speed, speed / across / 1000.0);
     } else {
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         ImGui::SliderInt("pulses per line", &spec.pulsesPerLine, 1, 100);
         alongPixel = spec.pulsesPerLine / perMetre;
         ImGui::TextColored(kDim, "for square pixels: %.1f pulses per line (%.0f pulses/m)", across * perMetre,
@@ -170,14 +170,14 @@ void App::drawCameraTriggering() {
                                                            status[i].fired, status[i].lost)
                                              : t.name + "###trigger";
         if (ImGui::TreeNode(label.c_str())) {
-            ImGui::SetNextItemWidth(kFieldWidth);
+            ImGui::SetNextItemWidth(fieldWidth());
             ImGui::InputText("name", &t.name);
             addressField("sensor", t.sensorInput, IoAddress::Area::Input, IoAddress::Size::Bit);
             addressField("trigger", t.triggerOutput, IoAddress::Area::Output, IoAddress::Size::Bit);
             scaledSlider("delay", t.delay, 1000.0, 0.0F, 500.0F, "%.0f ms");
             ImGui::SetItemTooltip("From the sensor's rising edge (as the PLC sees it) to the trigger");
             int method = t.method == DelayMethod::Timer ? 0 : 1;
-            ImGui::SetNextItemWidth(kFieldWidth);
+            ImGui::SetNextItemWidth(fieldWidth());
             if (ImGui::Combo("delayed by", &method, "one timer\0a queue, per item\0")) {
                 t.method = method == 0 ? DelayMethod::Timer : DelayMethod::PerItem;
             }
@@ -198,7 +198,7 @@ void App::drawCameraTriggering() {
         int& camera = newTriggerCamera_;
         sensor = std::clamp(sensor, 0, static_cast<int>(s.photocells.size()) - 1);
         camera = std::clamp(camera, 0, static_cast<int>(s.cameras.size()) - 1);
-        ImGui::SetNextItemWidth(90.0F);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
         if (ImGui::BeginCombo("##sensor", s.photocells[static_cast<std::size_t>(sensor)].name.c_str())) {
             for (std::size_t i = 0; i < s.photocells.size(); ++i) {
                 if (ImGui::Selectable(s.photocells[i].name.c_str(), static_cast<int>(i) == sensor)) {
@@ -208,7 +208,7 @@ void App::drawCameraTriggering() {
             ImGui::EndCombo();
         }
         ImGui::SameLine();
-        ImGui::SetNextItemWidth(90.0F);
+        ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
         if (ImGui::BeginCombo("##camera", s.cameras[static_cast<std::size_t>(camera)].name.c_str())) {
             for (std::size_t i = 0; i < s.cameras.size(); ++i) {
                 if (ImGui::Selectable(s.cameras[i].name.c_str(), static_cast<int>(i) == camera)) {
@@ -288,7 +288,7 @@ void App::drawTinTable() {
     const auto columns = static_cast<int>(cameras.size()) + 1;
     if (ImGui::BeginTable("tins", columns, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupScrollFreeze(0, 1);
-        ImGui::TableSetupColumn("item", ImGuiTableColumnFlags_WidthFixed, 50.0F);
+        ImGui::TableSetupColumn("item", ImGuiTableColumnFlags_WidthFixed, ImGui::GetFontSize() * 3.8F);
         for (const auto& camera : cameras) {
             ImGui::TableSetupColumn(camera.spec.name.c_str());
         }
@@ -356,7 +356,7 @@ void App::drawGapStudy() {
                        conveyor < s.conveyors.size() ? s.conveyors[conveyor].spec.name.c_str() : "?", facts.speed,
                        facts.itemLength * 1000.0F,
                        s.control == Control::SoftPlc ? "soft_plc's program" : "the built-in triggering");
-    ImGui::SetNextItemWidth(140.0F);
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10.8F);
     scaledSlider("gaps up to", studyUpTo_, 1000.0F, 20.0F, 1000.0F, "%.0f mm");
     ImGui::SameLine();
     ImGui::BeginDisabled(running || s.control == Control::S7Plc);

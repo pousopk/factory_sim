@@ -7,6 +7,7 @@
 // files (recent scenes, the window layout, the untitled scene) are in
 // ~/.config/factory_sim.
 #include "app/app.hpp"
+#include "app/theme.hpp"
 #include "render/gl.hpp" // before GLFW, which would otherwise include the old OpenGL header
 #include <GLFW/glfw3.h>
 #include <cstdio>
@@ -54,7 +55,12 @@ int main(int argc, char** argv) {
     std::filesystem::create_directories(fsim::configFolder(), ignored);
     const std::string layoutFile = (fsim::configFolder() / "layout.ini").string();
     ImGui::GetIO().IniFilename = layoutFile.c_str();
-    ImGui::StyleColorsDark();
+    ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_DockingEnable; // panels dock around the 3D view
+    // The font and style, at the screen's scale (2 on a HiDPI screen at 200 %).
+    float scaleX = 1.0F;
+    float scaleY = 1.0F;
+    glfwGetWindowContentScale(window, &scaleX, &scaleY);
+    fsim::applyTheme(scaleX);
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
 

@@ -13,7 +13,7 @@ ladder_editor ── Export ST ──► conveyor.st
           Download (online change)
 ```
 
-Try it: `./build/factory_sim examples/conveyor_line.json`, press **Start** on the control panel, then in another terminal `ladder_editor --connect=5020 ../ladder_editor/examples/conveyor` and watch the rungs follow the belt.
+Try it: `./build/factory_sim examples/conveyor_line.json`, press **Start** on the operator panel, then in another terminal `ladder_editor --connect=5020 ../ladder_editor/examples/conveyor` and watch the rungs follow the belt.
 
 ---
 

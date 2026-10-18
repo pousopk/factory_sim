@@ -21,3 +21,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 13. Line equipment | [13-line-equipment.md](13-line-equipment.md) |
 | 14. Editing in 3D | [14-editing-in-3d.md](14-editing-in-3d.md) |
 | 15. What the cameras see | [15-camera-images.md](15-camera-images.md) |
+| 16. A better window | [16-the-window.md](16-the-window.md) |

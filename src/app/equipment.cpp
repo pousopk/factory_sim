@@ -31,7 +31,7 @@ void App::drawConveyorEquipment(std::size_t index) {
 
     ImGui::SeparatorText("Accumulation zones");
     int zones = spec.zones;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::SliderInt("zones", &zones, 1, 12)) {
         setZones(s, index, zones, spec.zoneLogic);
     }
@@ -39,7 +39,7 @@ void App::drawConveyorEquipment(std::size_t index) {
                           "conveyor), so boxes can queue without pushing. Changing it restarts the run.");
     if (spec.zones > 1) {
         int logic = spec.zoneLogic == ZoneLogic::Local ? 0 : 1;
-        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SetNextItemWidth(fieldWidth());
         if (ImGui::Combo("run by", &logic, "the zone cards (zero pressure)\0the PLC, one output per zone\0")) {
             setZones(s, index, spec.zones, logic == 0 ? ZoneLogic::Local : ZoneLogic::Plc);
         }
@@ -85,7 +85,7 @@ void App::drawConveyorEquipment(std::size_t index) {
 
     ImGui::SeparatorText("Carriage");
     int carriage = static_cast<int>(spec.carriage);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("on", &carriage, "nothing (fixed)\0a turntable\0a lift\0")) {
         setCarriage(s, index, static_cast<Carriage>(carriage));
     }

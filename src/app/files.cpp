@@ -219,11 +219,12 @@ void App::drawMenuBar() {
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
+        ImGui::MenuItem("Control", nullptr, &showControl_);
         ImGui::MenuItem("Line", nullptr, &showLine_);
         ImGui::MenuItem("Inspector", nullptr, &showInspector_);
         ImGui::MenuItem("Triggers", nullptr, &showTriggers_);
         ImGui::MenuItem("I/O", nullptr, &showIo_);
-        ImGui::MenuItem("Control panel", nullptr, &showControlPanel_);
+        ImGui::MenuItem("Operator panel", nullptr, &showControlPanel_);
         ImGui::MenuItem("PLC variables", nullptr, &showPlcVariables_);
         ImGui::MenuItem("Cameras", nullptr, &showCameras_);
         ImGui::MenuItem("Camera view", nullptr, &showCameraView_);
@@ -231,6 +232,16 @@ void App::drawMenuBar() {
         ImGui::Separator();
         ImGui::MenuItem("Names in 3D", nullptr, &showNames_);
         ImGui::MenuItem("Shadows", nullptr, &renderer_.shadows);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Reset layout")) {
+            resetLayout_ = true;
+        }
+        ImGui::SetItemTooltip("The panels back where they start: building on the left, watching on the right,\n"
+                              "time underneath");
+        ImGui::EndMenu();
+    }
+    if (ImGui::BeginMenu("Help")) {
+        ImGui::MenuItem("Mouse and keys", "F1", &showHelp_);
         ImGui::EndMenu();
     }
     // Which file this is, on the right.

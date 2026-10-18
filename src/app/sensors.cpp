@@ -36,21 +36,21 @@ void App::drawProximityInspector(std::size_t index) {
             ImGui::TextColored(kDim, "  nothing within reach");
         }
     }
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     addressField("input", spec.input, IoAddress::Area::Input, IoAddress::Size::Bit);
     int kind = spec.inductive ? 0 : 1;
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("kind", &kind, "inductive (metal only)\0capacitive (anything)\0")) {
         spec.inductive = kind == 0;
     }
     ImGui::SetItemTooltip("Inductive: a coil's field, damped only by metal: tins, not cardboard.\n"
                           "Capacitive: sees anything, but non-metal much closer (here at 40 %% of sn).");
     conveyorCombo("on conveyor", spec.conveyor, s);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("position", &spec.along, 0.0F, conveyorLength(s, spec.conveyor), "%.3f m");
     int mount = static_cast<int>(spec.mount);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     if (ImGui::Combo("mounted", &mount, "above, looking down\0on the left\0on the right\0")) {
         spec.mount = static_cast<Mount>(mount);
     }
@@ -80,12 +80,12 @@ void App::drawLaserInspector(std::size_t index) {
             ImGui::TextColored(kProblem, "out of range: %u (overflow)", running.value);
         }
     }
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     addressField("output word", spec.output, IoAddress::Area::Input, IoAddress::Size::Word);
     ImGui::SetItemTooltip("The PLC input word it's wired to: 0..27648 over its range, 32767 out of it");
     conveyorCombo("over conveyor", spec.conveyor, s);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("position", &spec.along, 0.0F, conveyorLength(s, spec.conveyor), "%.3f m");
     scaledSlider("across", spec.across, 1000.0F, -300.0F, 300.0F, "%.0f mm from the middle");
     scaledSlider("mounted", spec.mountHeight, 1000.0F, 50.0F, 1500.0F, "%.0f mm above the belt");
@@ -111,15 +111,15 @@ void App::drawCurtainInspector(std::size_t index) {
                                ? (spec.lowest + static_cast<float>(running.blocked - 1) * spec.pitch) * 1000.0F
                                : 0.0F);
     }
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::InputText("name", &spec.name);
     addressField("clear", spec.clearInput, IoAddress::Area::Input, IoAddress::Size::Bit);
     ImGui::SetItemTooltip("On while every beam is clear (as a safety curtain's OSSD outputs are)");
     addressField("beams broken", spec.countInput, IoAddress::Area::Input, IoAddress::Size::Word);
     conveyorCombo("on conveyor", spec.conveyor, s);
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("position", &spec.along, 0.0F, conveyorLength(s, spec.conveyor), "%.3f m");
-    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderInt("beams", &spec.beams, 1, 64);
     scaledSlider("pitch", spec.pitch, 1000.0F, 2.5F, 50.0F, "%.1f mm");
     scaledSlider("lowest beam", spec.lowest, 1000.0F, 2.0F, 100.0F, "%.0f mm above the belt");
