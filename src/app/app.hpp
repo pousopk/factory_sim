@@ -27,6 +27,8 @@ public:
 private:
     void handleMouse(int height);
     void drawPanels();
+    void drawSensorPanel();
+    void drawTriggers();
     void resetScene();
 
     std::unique_ptr<World> world_;
@@ -36,6 +38,7 @@ private:
     float timeScale_ = 1.0F;
     double frameSeconds_ = 0.0; // the last frame's real duration, for the panel
     int stepsLastFrame_ = 0;
+    float scanMilliseconds_ = 10.0F; // a PLC reading the photocell this often (for the trigger table)
 };
 
 } // namespace fsim

@@ -73,6 +73,8 @@ endif()
 add_library(factory_sim_core STATIC
   src/sim/physics.cpp
   src/sim/world.cpp
+  src/sim/signal.cpp
+  src/sim/sensors.cpp
 )
 target_include_directories(factory_sim_core PUBLIC src)
 target_link_libraries(factory_sim_core

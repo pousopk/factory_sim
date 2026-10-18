@@ -5,6 +5,7 @@ factory_sim_mark_system(doctest)
 add_executable(factory_sim_tests
   test_main.cpp
   sim/world_test.cpp
+  sim/sensors_test.cpp
   render/scene_test.cpp
   render/orbit_camera_test.cpp
 )

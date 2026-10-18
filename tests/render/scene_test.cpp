@@ -76,7 +76,31 @@ TEST_CASE("The scene has every conveyor part and every item") {
     world.addConveyor(ConveyorSpec{});
     world.spawnItem({0.5F, 1.0F, 0.0F}, {0.2F, 0.15F, 0.2F}, {1, 0, 0});
     const auto boxes = sceneBoxes(world);
-    REQUIRE(boxes.size() == 8);
+    REQUIRE(boxes.size() == 8); // 7 conveyor parts and the item
     CHECK(boxes.back().size == glm::vec3(0.2F, 0.15F, 0.2F));
     CHECK(boxes.back().color == glm::vec3(1, 0, 0));
+}
+
+TEST_CASE("A photocell: housing, reflector, a beam at its height, and an LED lit by the output") {
+    World world;
+    ConveyorSpec spec;
+    spec.beltHeight = 0.8F;
+    world.addConveyor(spec);
+    PhotocellSpec cell;
+    cell.along = 1.0F;
+    cell.height = 0.05F;
+    world.addPhotocell(cell);
+    auto& photocell = world.photocells().front();
+    auto parts = photocellBoxes(photocell, world.conveyors().front());
+    REQUIRE(parts.size() == 4);
+    const auto& beam = parts[2];
+    CHECK(beam.unlit);
+    CHECK(beam.alpha < 1.0F);
+    CHECK(beam.center.y == doctest::Approx(0.85F));
+    CHECK(beam.center.x == doctest::Approx(1.0F));
+    CHECK(beam.size.z > spec.width); // across the whole belt
+    const auto ledOff = parts[3].color;
+    photocell.output.set(0.1, true);
+    parts = photocellBoxes(photocell, world.conveyors().front());
+    CHECK(parts[3].color != ledOff);
 }

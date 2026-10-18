@@ -54,11 +54,13 @@ The first configure downloads its dependencies (Jolt Physics, glm, Dear ImGui, I
 
 Left drag turns the view around the point it looks at, right (or middle) drag moves that point, the wheel zooms. The panel sets the belt's speed and ramp, how often boxes come and their size, and how fast simulated time runs: **Pause**, then **Step 1 ms** to watch a box move exactly speed × 1 ms per step, or a time scale of 0.1x to watch it in slow motion with exactly the same physics.
 
+The **Photocell** panel moves the beam along the belt and sets its height, diameter, switching thresholds and response time; its LED lights while the output is on. The **Encoder** section sets the drive roller's encoder (pulses per revolution, roller diameter) and shows its count. The **Triggers** window lists each time the photocell switched on: when the beam was covered and when the output switched (exact to a fraction of a millisecond), how far past the beam the box's front edge was then, the same as a PLC scanning every few milliseconds would see it, and the encoder count. A see-through box shows where the last triggered box was at its output time.
+
 ## Layout
 
 | Path | Contents |
 |---|---|
-| `src/sim/` | The simulation: Jolt set up for repeatable results (`physics.hpp`), conveyors, items and time (`world.hpp`) |
+| `src/sim/` | The simulation: Jolt set up for repeatable results (`physics.hpp`), conveyors, items and time (`world.hpp`), photocells and encoders (`sensors.hpp`), signals with exact switching times (`signal.hpp`) |
 | `src/render/` | What to draw (`scene.hpp`) and from where (`orbit_camera.hpp`), both plain geometry; the OpenGL renderer and shaders |
 | `src/app/` | The application: window, frame loop, panels |
 | `tests/` | doctest unit tests, mirroring `src/`; they run the simulation headless |

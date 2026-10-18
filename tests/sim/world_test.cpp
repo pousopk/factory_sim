@@ -164,3 +164,18 @@ TEST_CASE("Clearing removes every item, and the world goes on") {
     world.run(0.5);
     CHECK(view(world, id).velocity.x > 0.4F);
 }
+
+#include "sim/signal.hpp"
+
+TEST_CASE("A signal keeps its exact switching times") {
+    Signal signal;
+    CHECK_FALSE(signal.value());
+    signal.set(0.0105, true);
+    signal.set(0.0105, true); // no change: not recorded
+    signal.set(0.0233, false);
+    REQUIRE(signal.edges().size() == 2);
+    CHECK_FALSE(signal.valueAt(0.0104));
+    CHECK(signal.valueAt(0.0105));
+    CHECK(signal.valueAt(0.02));
+    CHECK_FALSE(signal.valueAt(0.03));
+}

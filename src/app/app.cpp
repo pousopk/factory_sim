@@ -1,6 +1,7 @@
 #include "app/app.hpp"
 #include "render/scene.hpp"
 #include <algorithm>
+#include <cmath>
 #include <imgui.h>
 
 namespace fsim {
@@ -15,7 +16,8 @@ App::App() {
     resetScene();
 }
 
-// The starting scene: one 3 m conveyor along +X, boxes every 1.2 s.
+// The starting scene: one 3 m conveyor along +X, boxes every 1.2 s, a
+// photocell halfway along.
 void App::resetScene() {
     world_ = std::make_unique<World>();
     ConveyorSpec conveyor;
@@ -25,6 +27,10 @@ void App::resetScene() {
     SpawnerSpec spawner;
     spawner.interval = 1.2;
     world_->addSpawner(spawner);
+    PhotocellSpec photocell;
+    photocell.name = "B1";
+    photocell.along = 1.5F;
+    world_->addPhotocell(photocell);
 }
 
 void App::frame(double realSeconds, int width, int height) {
@@ -37,6 +43,8 @@ void App::frame(double realSeconds, int width, int height) {
     handleMouse(height);
     renderer_.draw(sceneBoxes(*world_), camera_, width, height);
     drawPanels();
+    drawSensorPanel();
+    drawTriggers();
 }
 
 // Left drag turns around the target, right or middle drag moves it, the
@@ -138,8 +146,118 @@ void App::drawPanels() {
     }
     ImGui::Text("%zu boxes", world_->itemCount());
 
+    // --- The encoder on its drive roller ---
+    ImGui::SeparatorText("Encoder");
+    auto& encoder = conveyor.spec.encoder;
+    ImGui::SetNextItemWidth(180.0F);
+    ImGui::SliderInt("pulses/rev", &encoder.pulsesPerRevolution, 100, 5000);
+    ImGui::SetNextItemWidth(180.0F);
+    ImGui::SliderFloat("roller", &encoder.rollerDiameter, 0.02F, 0.2F, "%.3f m");
+    const double perMetre = encoder.pulsesPerMetre();
+    ImGui::Text("count %lld", static_cast<long long>(conveyor.encoderCount()));
+    ImGui::TextColored(kDim, "%.0f pulses/m, %.3f mm per pulse, %.0f Hz now", perMetre, 1000.0 / perMetre,
+                       conveyor.speed * perMetre);
+
     ImGui::SeparatorText("Camera");
     ImGui::TextColored(kDim, "Left drag: turn. Right drag: move. Wheel: zoom.");
+    ImGui::End();
+}
+
+void App::drawSensorPanel() {
+    if (world_->photocells().empty()) {
+        return;
+    }
+    auto& photocell = world_->photocells().front();
+    auto& spec = photocell.spec;
+    ImGui::SetNextWindowPos(ImVec2(10, 560), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Photocell");
+    // The output, as an LED, and how much of the beam is covered right now.
+    const auto on = photocell.output.value();
+    ImGui::ColorButton("##led", on ? ImVec4(1.0F, 0.85F, 0.1F, 1.0F) : ImVec4(0.25F, 0.22F, 0.12F, 1.0F),
+                       ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
+    ImGui::SameLine();
+    ImGui::Text("%s output %s", spec.name.c_str(), on ? "ON" : "off");
+    ImGui::SameLine();
+    ImGui::TextColored(kDim, "  beam %.0f %% covered", photocell.covered * 100.0F);
+
+    const float length = world_->conveyors()[spec.conveyor].spec.length;
+    ImGui::SetNextItemWidth(180.0F);
+    ImGui::SliderFloat("position", &spec.along, 0.1F, length - 0.1F, "%.3f m");
+    ImGui::SetNextItemWidth(180.0F);
+    ImGui::SliderFloat("height", &spec.height, 0.005F, 0.3F, "%.3f m above belt");
+    ImGui::SetNextItemWidth(180.0F);
+    float response = static_cast<float>(spec.responseTime * 1000.0);
+    if (ImGui::SliderFloat("response", &response, 0.0F, 20.0F, "%.2f ms")) {
+        spec.responseTime = response / 1000.0;
+    }
+    ImGui::SetItemTooltip("From the beam being blocked to the output switching.\n"
+                          "Typical photocells: 0.25 to 2 ms.");
+    ImGui::SetNextItemWidth(180.0F);
+    float diameter = spec.beamDiameter * 1000.0F;
+    if (ImGui::SliderFloat("beam", &diameter, 1.0F, 30.0F, "%.1f mm")) {
+        spec.beamDiameter = diameter / 1000.0F;
+    }
+    ImGui::SetNextItemWidth(180.0F);
+    float on100 = spec.onFraction * 100.0F;
+    float off100 = spec.offFraction * 100.0F;
+    if (ImGui::SliderFloat("on above", &on100, 10.0F, 95.0F, "%.0f %% covered")) {
+        spec.onFraction = on100 / 100.0F;
+        spec.offFraction = std::min(spec.offFraction, spec.onFraction);
+    }
+    ImGui::SetNextItemWidth(180.0F);
+    if (ImGui::SliderFloat("off below", &off100, 5.0F, 90.0F, "%.0f %% covered")) {
+        spec.offFraction = std::min(off100 / 100.0F, spec.onFraction);
+    }
+    ImGui::TextColored(kDim, "smallest object it sees: %.1f mm long", spec.onFraction * spec.beamDiameter * 1000.0F);
+    ImGui::End();
+}
+
+// The last triggers: when the beam was blocked, when the output switched,
+// and how far past the beam the box's front was by then, also as a PLC
+// scanning every few ms would see it.
+void App::drawTriggers() {
+    if (world_->photocells().empty()) {
+        return;
+    }
+    const auto& photocell = world_->photocells().front();
+    ImGui::SetNextWindowPos(ImVec2(940, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(450, 330), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Triggers");
+    ImGui::SetNextItemWidth(140.0F);
+    ImGui::SliderFloat("PLC scan", &scanMilliseconds_, 1.0F, 50.0F, "%.0f ms");
+    ImGui::SetItemTooltip("A PLC reads its inputs once per cycle: the trigger reaches the program\n"
+                          "at the next cycle start after the output switches.");
+    const double scan = scanMilliseconds_ / 1000.0;
+    if (ImGui::BeginTable("triggers", 6, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("box");
+        ImGui::TableSetupColumn("beam s");
+        ImGui::TableSetupColumn("output s");
+        ImGui::TableSetupColumn("error mm");
+        ImGui::TableSetupColumn("at scan mm");
+        ImGui::TableSetupColumn("encoder");
+        ImGui::TableHeadersRow();
+        for (const auto& trigger : photocell.triggers) {
+            // The first PLC cycle starting at or after the output time.
+            const double seen = std::ceil(trigger.outputTime / scan - 1e-9) * scan;
+            const double atScan = trigger.positionError + trigger.speed * (seen - trigger.outputTime);
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::Text("%llu", static_cast<unsigned long long>(trigger.item));
+            ImGui::TableNextColumn();
+            ImGui::Text("%.5f", trigger.beamTime);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.5f", trigger.outputTime);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.2f", trigger.positionError * 1000.0F);
+            ImGui::TableNextColumn();
+            ImGui::Text("%.2f", atScan * 1000.0);
+            ImGui::TableNextColumn();
+            ImGui::Text("%lld", static_cast<long long>(trigger.encoderCount));
+        }
+        ImGui::EndTable();
+    }
     ImGui::End();
 }
 

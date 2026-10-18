@@ -3,6 +3,7 @@
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace fsim {
 
@@ -28,6 +29,13 @@ JPH::Ref<JPH::BoxShape> makeBox(JPH::Vec3 halfSize) {
     return new JPH::BoxShape(halfSize, radius);
 }
 
+// How far a box (turned by `rotation`, half its size `half`) reaches from
+// its centre along `direction`: each half-size, projected onto it.
+float reach(const glm::mat3& rotation, glm::vec3 half, glm::vec3 direction) {
+    return std::abs(glm::dot(rotation[0], direction)) * half.x + std::abs(glm::dot(rotation[1], direction)) * half.y +
+           std::abs(glm::dot(rotation[2], direction)) * half.z;
+}
+
 // A body's user data says what it is: 0 for boxes and the floor, and
 // conveyor index + 1 for conveyor belts.
 constexpr JPH::uint64 kConveyorTag = 1ULL << 32;
@@ -43,6 +51,10 @@ glm::vec3 boxColor(ItemId id) {
 }
 
 } // namespace
+
+std::int64_t Conveyor::encoderCount() const {
+    return static_cast<std::int64_t>(std::floor(travelled * spec.encoder.pulsesPerMetre()));
+}
 
 glm::vec3 Conveyor::direction() const {
     return {std::cos(spec.heading), 0.0F, -std::sin(spec.heading)};
@@ -131,6 +143,21 @@ std::size_t World::addConveyor(const ConveyorSpec& spec) {
     return index;
 }
 
+std::size_t World::addPhotocell(const PhotocellSpec& spec) {
+    Photocell photocell;
+    photocell.spec = spec;
+    photocells_.push_back(std::move(photocell));
+    return photocells_.size() - 1;
+}
+
+std::int64_t World::encoderCountAt(std::size_t conveyor, double t) const {
+    const auto& c = conveyors_.at(conveyor);
+    const double stepEnd = time();
+    const double fraction = std::clamp(1.0 - (stepEnd - t) / kStep, 0.0, 1.0);
+    const double travelled = c.travelledBefore + (c.travelled - c.travelledBefore) * fraction;
+    return static_cast<std::int64_t>(std::floor(travelled * c.spec.encoder.pulsesPerMetre()));
+}
+
 std::size_t World::addSpawner(const SpawnerSpec& spec) {
     spawners_.push_back(spec);
     spawnerStates_.push_back(SpawnerState{time() + spec.interval});
@@ -192,11 +219,13 @@ void World::run(double seconds) {
 }
 
 void World::step() {
+    const double stepStart = time();
     updateConveyors();
     updateSpawners();
     physics_.step(static_cast<float>(kStep));
     removeFallenItems();
     ++stepCount_;
+    updatePhotocells(stepStart, time()); // the world now is as it is at the end of the step
 }
 
 // Each belt ramps its speed towards the target, like a VFD with a ramp time.
@@ -205,6 +234,7 @@ void World::updateConveyors() {
         const float maxChange = conveyor.spec.acceleration * static_cast<float>(kStep);
         const float difference = conveyor.spec.targetSpeed - conveyor.speed;
         conveyor.speed += std::clamp(difference, -maxChange, maxChange);
+        conveyor.travelledBefore = conveyor.travelled;
         conveyor.travelled += conveyor.speed * kStep;
     }
 }
@@ -245,6 +275,113 @@ void World::removeFallenItems() {
     }
     for (const auto id : toRemove) {
         removeItem(id);
+    }
+}
+
+// Each photocell looks at where the boxes are now, at the end of the step.
+// The beam's coverage was something else at the start of the step; if it
+// crossed the on or off threshold in between, the crossing time is found by
+// interpolating between the two, since boxes move evenly within one 1 ms
+// step. So switching times are exact to a fraction of a millisecond.
+void World::updatePhotocells(double stepStart, double stepEnd) {
+    const auto& bodies = physics_.bodies();
+    for (auto& photocell : photocells_) {
+        const auto& spec = photocell.spec;
+        if (spec.conveyor >= conveyors_.size()) {
+            continue;
+        }
+        const auto& conveyor = conveyors_[spec.conveyor];
+        const auto origin = conveyor.beltPoint(0.0F);
+        const auto along = conveyor.direction();
+        const glm::vec3 side{along.z, 0.0F, -along.x};
+        const float beamY = conveyor.spec.beltHeight + spec.height;
+
+        // Each box's extent along the belt, if it's in the beam's path:
+        // across the belt, and reaching the beam's height.
+        std::vector<std::pair<float, float>> intervals;
+        std::vector<std::size_t> owners; // which item each interval belongs to
+        for (std::size_t i = 0; i < items_.size(); ++i) {
+            const auto& item = items_[i];
+            const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
+            const auto rotation = glm::mat3_cast(toGlm(bodies.GetRotation(item.body)));
+            const auto half = item.size / 2.0F;
+            const auto offset = center - origin;
+            const float a = glm::dot(offset, along);
+            const float vertical = reach(rotation, half, {0.0F, 1.0F, 0.0F});
+            const bool atHeight = center.y - vertical <= beamY && beamY <= center.y + vertical;
+            const bool acrossBelt =
+                std::abs(glm::dot(offset, side)) < conveyor.spec.width / 2.0F + reach(rotation, half, side);
+            if (atHeight && acrossBelt) {
+                const float extent = reach(rotation, half, along);
+                intervals.emplace_back(a - extent, a + extent);
+                owners.push_back(i);
+            }
+        }
+        const float before = photocell.covered;
+        const float now = beamCoverage(spec.along, spec.beamDiameter, intervals);
+        photocell.covered = now;
+
+        // When, within the step, did the coverage pass `threshold`?
+        const auto crossing = [&](float threshold) {
+            const float fraction = now == before ? 1.0F : (threshold - before) / (now - before);
+            return stepStart + kStep * std::clamp(static_cast<double>(fraction), 0.0, 1.0);
+        };
+        if (!photocell.beam && now > spec.onFraction) {
+            photocell.beam = true;
+            const double beamTime = crossing(spec.onFraction);
+            photocell.pending.push_back(Edge{beamTime + spec.responseTime, true});
+            // The box it's about: the one covering the beam's centre, or the
+            // nearest to it.
+            Trigger trigger;
+            float best = std::numeric_limits<float>::max();
+            for (std::size_t k = 0; k < intervals.size(); ++k) {
+                const auto [from, to] = intervals[k];
+                const float distance = spec.along < from ? from - spec.along : spec.along > to ? spec.along - to : 0.0F;
+                if (distance < best) {
+                    best = distance;
+                    trigger.item = items_[owners[k]].id;
+                }
+            }
+            trigger.beamTime = beamTime;
+            photocell.pendingTriggers.push_back(trigger);
+        } else if (photocell.beam && now < spec.offFraction) {
+            photocell.beam = false;
+            photocell.pending.push_back(Edge{crossing(spec.offFraction) + spec.responseTime, false});
+        }
+
+        // Output changes whose response time has passed by the end of this step.
+        while (!photocell.pending.empty() && photocell.pending.front().time <= stepEnd + 1e-12) {
+            const auto edge = photocell.pending.front();
+            photocell.pending.pop_front();
+            photocell.output.set(edge.time, edge.value);
+            if (!edge.value || photocell.pendingTriggers.empty()) {
+                continue;
+            }
+            auto trigger = photocell.pendingTriggers.front();
+            photocell.pendingTriggers.pop_front();
+            trigger.outputTime = edge.time;
+            trigger.encoderCount = encoderCountAt(spec.conveyor, edge.time);
+            const auto it =
+                std::find_if(items_.begin(), items_.end(), [&](const Item& item) { return item.id == trigger.item; });
+            if (it != items_.end()) {
+                // Where the box was at the output time: back from where it
+                // is now, at its present velocity.
+                const auto velocity = toGlm(bodies.GetLinearVelocity(it->body));
+                const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(it->body)));
+                const auto rotation = toGlm(bodies.GetRotation(it->body));
+                trigger.itemCenter = center - velocity * static_cast<float>(stepEnd - edge.time);
+                trigger.itemRotation = rotation;
+                trigger.itemSize = it->size;
+                trigger.speed = glm::dot(velocity, along);
+                const float extent = reach(glm::mat3_cast(rotation), it->size / 2.0F, along);
+                const float front = glm::dot(trigger.itemCenter - origin, along) + extent;
+                trigger.positionError = front - spec.along;
+            }
+            photocell.triggers.push_front(trigger);
+            if (photocell.triggers.size() > Photocell::kTriggerHistory) {
+                photocell.triggers.pop_back();
+            }
+        }
     }
 }
 

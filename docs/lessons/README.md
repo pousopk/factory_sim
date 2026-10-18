@@ -5,3 +5,4 @@ What each milestone teaches, about simulating machines and about C++, with point
 | Milestone | Lesson |
 |---|---|
 | 1. One conveyor in 3D | [01-one-conveyor.md](01-one-conveyor.md) |
+| 2. Sensors | [02-sensors.md](02-sensors.md) |

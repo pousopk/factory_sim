@@ -34,11 +34,17 @@ uniform vec3 uColor;
 uniform vec3 uSize;
 uniform float uStripeSpacing; // 0: no stripes
 uniform float uStripeOffset;
+uniform float uAlpha;
+uniform float uUnlit;         // 1: a light source, not shaded
 out vec4 fragColor;
 
 const vec3 kSun = normalize(vec3(0.4, 1.0, 0.3));
 
 void main() {
+    if (uUnlit > 0.5) {
+        fragColor = vec4(uColor, uAlpha);
+        return;
+    }
     vec3 color = uColor;
     // A moving belt: light stripes across its top, moving with the surface.
     if (uStripeSpacing > 0.0 && vLocalNormal.y > 0.5) {
@@ -55,7 +61,7 @@ void main() {
     vec3 normal = normalize(vNormal);
     float sun = max(dot(normal, kSun), 0.0);
     float sky = 0.35 + 0.25 * normal.y;
-    fragColor = vec4(color * (sky + 0.75 * sun), 1.0);
+    fragColor = vec4(color * (sky + 0.75 * sun), uAlpha);
 }
 )";
 
@@ -172,7 +178,9 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
     boxShader_.use();
     boxShader_.set("uViewProjection", viewProjection);
     glBindVertexArray(cubeArray_);
-    for (const auto& box : boxes) {
+    // Solid boxes first; see-through ones after, blended over what's behind
+    // them, without hiding each other (no depth writes).
+    const auto drawBox = [&](const DrawBox& box) {
         const auto rotation = glm::mat4_cast(box.rotation);
         const auto model =
             glm::translate(glm::mat4(1.0F), box.center) * rotation * glm::scale(glm::mat4(1.0F), box.size);
@@ -182,8 +190,25 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
         boxShader_.set("uColor", box.color);
         boxShader_.set("uStripeSpacing", box.stripeSpacing);
         boxShader_.set("uStripeOffset", box.stripeOffset);
+        boxShader_.set("uAlpha", box.alpha);
+        boxShader_.set("uUnlit", box.unlit ? 1.0F : 0.0F);
         glDrawArrays(GL_TRIANGLES, 0, 36);
+    };
+    for (const auto& box : boxes) {
+        if (box.alpha >= 1.0F) {
+            drawBox(box);
+        }
     }
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    glDepthMask(GL_FALSE);
+    for (const auto& box : boxes) {
+        if (box.alpha < 1.0F) {
+            drawBox(box);
+        }
+    }
+    glDepthMask(GL_TRUE);
+    glDisable(GL_BLEND);
     glBindVertexArray(0);
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
