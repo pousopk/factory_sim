@@ -9,10 +9,12 @@ add_executable(factory_sim_tests
   sim/scene_test.cpp
   sim/actuators_test.cpp
   sim/control_test.cpp
+  sim/camera_test.cpp
   render/scene_test.cpp
   render/orbit_camera_test.cpp
   edit/scene_history_test.cpp
   analysis/analysis_test.cpp
+  analysis/tin_study_test.cpp
 )
 target_link_libraries(factory_sim_tests PRIVATE factory_sim_view doctest::doctest fmt::fmt)
 add_test(NAME factory_sim_tests COMMAND factory_sim_tests)
@@ -22,6 +24,6 @@ add_executable(factory_sim_plc_tests
   test_main.cpp
   plc/plc_test.cpp
 )
-target_link_libraries(factory_sim_plc_tests PRIVATE factory_sim_plc soft_plc_core doctest::doctest)
+target_link_libraries(factory_sim_plc_tests PRIVATE factory_sim_plc factory_sim_view soft_plc_core doctest::doctest)
 target_compile_definitions(factory_sim_plc_tests PRIVATE FACTORY_SIM_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 add_test(NAME factory_sim_plc_tests COMMAND factory_sim_plc_tests)

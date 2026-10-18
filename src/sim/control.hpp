@@ -50,6 +50,29 @@ struct SorterSpec {
     bool operator==(const SorterSpec&) const = default;
 };
 
+// How the built-in camera triggering delays a camera's trigger after the
+// sensor sees an item.
+enum class DelayMethod {
+    // One on-delay timer per camera, as a quick PLC program would have it:
+    // the sensor's edge starts it, its end fires the trigger. While it runs,
+    // further edges are lost: a second item that arrives before the timer
+    // ends gets no trigger at all.
+    Timer,
+    // A queue of trigger times, one per item (like the sorter's queue of
+    // encoder counts): every item gets its own trigger, however close.
+    PerItem,
+};
+
+struct CameraTriggerSpec {
+    std::string name = "K1";
+    std::string sensorInput = "%IX0.0";   // the photocell that sees the items
+    std::string triggerOutput = "%QX0.0"; // the camera's trigger line
+    double delay = 0.0;                   // s, from the sensor's edge to the trigger
+    DelayMethod method = DelayMethod::Timer;
+
+    bool operator==(const CameraTriggerSpec&) const = default;
+};
+
 // Anything that controls the line by reading and writing the I/O image.
 class ControlProgram {
 public:
@@ -82,6 +105,36 @@ private:
         std::size_t fired = 0;
     };
     std::vector<Sorter> sorters_;
+};
+
+// The built-in camera triggering: one photocell, any number of cameras,
+// each triggered a set time after the photocell sees an item. A trigger is
+// a pulse one scan long; a camera takes a picture on its rising edge, so
+// two triggers need at least one scan with the output off between them.
+class CameraTriggering final : public ControlProgram {
+public:
+    explicit CameraTriggering(std::vector<CameraTriggerSpec> triggers);
+    void scan(IoImage& io, double time) override;
+    std::string name() const override { return "built-in camera triggering"; }
+
+    struct Status {
+        std::size_t fired = 0;   // triggers sent
+        std::size_t lost = 0;    // sensor edges that got no trigger (the timer was still running)
+        std::size_t waiting = 0; // items seen, trigger not sent yet
+    };
+    std::vector<Status> status() const;
+
+private:
+    struct Trigger {
+        CameraTriggerSpec spec;
+        bool lastSensor = false;
+        bool output = false;
+        bool timing = false; // the timer is running (Timer)
+        double started = 0.0;
+        std::deque<double> due; // when each item's trigger is due (PerItem)
+        Status status;
+    };
+    std::vector<Trigger> triggers_;
 };
 
 } // namespace fsim

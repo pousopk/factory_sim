@@ -1,4 +1,5 @@
 #pragma once
+#include "analysis/tin_study.hpp"
 #include "edit/scene_history.hpp"
 #include "render/orbit_camera.hpp"
 #include "render/renderer.hpp"
@@ -6,6 +7,7 @@
 #include "sim/scene.hpp"
 #include "sim/world.hpp"
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <set>
@@ -47,6 +49,14 @@ private:
     void drawDiverterInspector(std::size_t index);
     void drawStopperInspector(std::size_t index);
     void drawBinInspector(std::size_t index);
+    // The cameras (cameras.cpp): a camera's settings, the camera triggering
+    // in the main panel, and the Cameras window (which camera took which
+    // item, and the gap study).
+    void drawCameraInspector(std::size_t index);
+    void drawCameraTriggering();
+    void drawCameras();
+    void drawTinTable();
+    void drawGapStudy();
     // The manual controls of an actuator, and its sensors' LEDs.
     void drawStrokeControls(Stroke& stroke, Pick pick);
     void finishFiring(); // pushers fired once retract when they get there
@@ -88,17 +98,26 @@ private:
 
     // The logic analyser's state.
     bool showAnalyser_ = false;
-    float analyserSeconds_ = 5.0F;  // how much time the timelines show
-    bool followTime_ = true;        // the timelines follow the simulation (off: look around freely)
-    double viewFrom_ = 0.0;         // the time span shown, shared by the traces and the speed plot
+    float analyserSeconds_ = 5.0F; // how much time the timelines show
+    bool followTime_ = true;       // the timelines follow the simulation (off: look around freely)
+    double viewFrom_ = 0.0;        // the time span shown, shared by the traces and the speed plot
     double viewTo_ = 5.0;
-    double markerA_ = 0.0;          // two markers to measure a time difference
+    double markerA_ = 0.0; // two markers to measure a time difference
     double markerB_ = 0.0;
     bool markersPlaced_ = false;
     std::set<std::string> hiddenTraces_;
     int histogramPhotocell_ = 0;
     std::string eventFilter_;
     std::string exportStatus_;
+
+    // The cameras: the trigger being added, and the gap study, which runs
+    // on another thread so the window keeps drawing meanwhile.
+    int newTriggerSensor_ = 0;
+    int newTriggerCamera_ = 0;
+    float studyUpTo_ = 0.25F; // m: the largest gap studied
+    std::future<std::vector<GapOutcome>> studyRunning_;
+    std::vector<GapOutcome> study_;
+    Scene studied_; // the scene the study is for
 
     bool paused_ = false;
     float timeScale_ = 1.0F;

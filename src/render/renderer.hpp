@@ -25,6 +25,9 @@ private:
     Shader floorShader_;
     GLuint cubeArray_ = 0; // vertex array: a unit cube with normals
     GLuint cubeBuffer_ = 0;
+    GLuint cylinderArray_ = 0; // a cylinder, for tins
+    GLuint cylinderBuffer_ = 0;
+    GLsizei cylinderVertices_ = 0;
     GLuint floorArray_ = 0; // vertex array: one big square at y = 0
     GLuint floorBuffer_ = 0;
 };

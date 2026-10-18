@@ -1,6 +1,7 @@
 #include "sim/world.hpp"
 #include <Jolt/Physics/Body/BodyCreationSettings.h>
 #include <Jolt/Physics/Collision/Shape/BoxShape.h>
+#include <Jolt/Physics/Collision/Shape/CylinderShape.h>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -29,9 +30,27 @@ JPH::Ref<JPH::BoxShape> makeBox(JPH::Vec3 halfSize) {
     return new JPH::BoxShape(halfSize, radius);
 }
 
-// How far a box (turned by `rotation`, half its size `half`) reaches from
-// its centre along `direction`: each half-size, projected onto it.
-float reach(const glm::mat3& rotation, glm::vec3 half, glm::vec3 direction) {
+// An item's shape for Jolt: a box, or a tin (a cylinder around its own y
+// axis, standing upright).
+JPH::Ref<JPH::Shape> makeItemShape(Shape shape, glm::vec3 size) {
+    if (shape == Shape::Tin) {
+        const float radius = size.x / 2.0F;
+        const float halfHeight = size.y / 2.0F;
+        return new JPH::CylinderShape(halfHeight, radius,
+                                      std::min(JPH::cDefaultConvexRadius, 0.5F * std::min(radius, halfHeight)));
+    }
+    return JPH::Ref<JPH::Shape>(makeBox(toJolt(size / 2.0F)));
+}
+
+// How far an item (turned by `rotation`, half its size `half`) reaches from
+// its centre along `direction`. A box: each half-size, projected onto it. A
+// tin: its radius across its axis, half its height along it (for a tin
+// standing upright, its radius in any horizontal direction).
+float reach(Shape shape, const glm::mat3& rotation, glm::vec3 half, glm::vec3 direction) {
+    if (shape == Shape::Tin) {
+        const float along = std::min(1.0F, std::abs(glm::dot(rotation[1], direction)));
+        return half.x * std::sqrt(1.0F - along * along) + half.y * along;
+    }
     return std::abs(glm::dot(rotation[0], direction)) * half.x + std::abs(glm::dot(rotation[1], direction)) * half.y +
            std::abs(glm::dot(rotation[2], direction)) * half.z;
 }
@@ -39,6 +58,9 @@ float reach(const glm::mat3& rotation, glm::vec3 half, glm::vec3 direction) {
 // A body's user data says what it is: 0 for boxes and the floor, and
 // conveyor index + 1 for conveyor belts.
 constexpr JPH::uint64 kConveyorTag = 1ULL << 32;
+
+// Tins are tinplate grey.
+const glm::vec3 kTinColor{0.78F, 0.80F, 0.83F};
 
 // Bad (NOK) boxes are red, and the good ones never are.
 const glm::vec3 kNokColor{0.80F, 0.12F, 0.12F};
@@ -302,17 +324,22 @@ std::size_t World::addSpawner(const SpawnerSpec& spec) {
     return spawners_.size() - 1;
 }
 
-ItemId World::spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading, bool nok) {
-    JPH::BodyCreationSettings settings(makeBox(toJolt(size / 2.0F)), JPH::RVec3(position.x, position.y, position.z),
+ItemId World::spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading, bool nok, Shape shape,
+                        glm::vec3 velocity) {
+    if (shape == Shape::Tin) {
+        size.z = size.x; // round
+    }
+    JPH::BodyCreationSettings settings(makeItemShape(shape, size), JPH::RVec3(position.x, position.y, position.z),
                                        JPH::Quat::sRotation(JPH::Vec3::sAxisY(), heading), JPH::EMotionType::Dynamic,
                                        layers::kMoving);
-    settings.mFriction = 0.6F; // cardboard
+    settings.mFriction = shape == Shape::Tin ? 0.4F : 0.6F; // tinplate, cardboard
+    settings.mLinearVelocity = toJolt(velocity);
     // A box resting on a belt that has stopped would fall asleep, and Jolt
     // doesn't wake sleeping bodies when the belt starts again.
     settings.mAllowSleeping = false;
     const auto body = physics_.bodies().CreateAndAddBody(settings, JPH::EActivation::Activate);
     const auto id = nextItemId_++;
-    items_.push_back(Item{id, body, size, color, -1.0, nok});
+    items_.push_back(Item{id, body, size, color, -1.0, nok, shape});
     return id;
 }
 
@@ -374,6 +401,7 @@ void World::step() {
     removeFallenItems();
     ++stepCount_;
     updatePhotocells(stepStart, time()); // the world now is as it is at the end of the step
+    updateCameras(time());
     updateBins();
 }
 
@@ -424,6 +452,9 @@ void World::scan(double time) {
     std::for_each(pushers_.begin(), pushers_.end(), strokeInputs);
     std::for_each(diverters_.begin(), diverters_.end(), strokeInputs);
     std::for_each(stoppers_.begin(), stoppers_.end(), strokeInputs);
+    for (const auto& camera : cameras_) {
+        write(camera.spec.readyInput, camera.timing.busyAt(time) ? 0U : 1U);
+    }
     for (std::size_t i = 0; i < buttons_.size(); ++i) {
         // A normally closed contact is closed (TRUE) while the button is NOT pressed.
         write(buttons_[i].address, pressed(i) != buttons_[i].normallyClosed ? 1U : 0U);
@@ -472,6 +503,115 @@ void World::scan(double time) {
     }
     for (std::size_t i = 0; i < lamps_.size(); ++i) {
         lampSignals_[i].set(time, lit(i));
+    }
+    // A camera takes a picture on its trigger line's rising edge.
+    for (auto& camera : cameras_) {
+        if (const auto on = read(camera.spec.triggerOutput)) {
+            const bool was = camera.trigger.value();
+            camera.trigger.set(time, *on);
+            if (*on && !was) {
+                cameraTrigger(camera, time);
+            }
+        }
+    }
+}
+
+// ---------------------------------------------------------------- Cameras
+
+std::size_t World::addCamera(const CameraSpec& spec) {
+    Camera camera;
+    camera.spec = spec;
+    cameras_.push_back(std::move(camera));
+    return cameras_.size() - 1;
+}
+
+void World::setCameras(const std::vector<CameraSpec>& specs) {
+    cameras_.resize(specs.size());
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+        if (cameras_[i].spec.conveyor != specs[i].conveyor) {
+            cameras_[i] = Camera{}; // on another conveyor: a different camera, starting afresh
+        }
+        cameras_[i].spec = specs[i];
+    }
+}
+
+void World::triggerCamera(std::size_t camera) {
+    if (camera < cameras_.size()) {
+        cameraTrigger(cameras_[camera], time());
+    }
+}
+
+// A trigger: taken if the camera is free, ignored if it's busy. Either way
+// it's remembered, with the item it saw (or would have seen), which is
+// decided when the exposure comes.
+void World::cameraTrigger(Camera& camera, double time) {
+    if (camera.busy.value() && !camera.timing.busyAt(time)) {
+        camera.busy.set(camera.timing.busyUntil(), false); // it became free at the very moment
+    }
+    Shot shot;
+    shot.triggerTime = time;
+    shot.taken = camera.timing.trigger(time, camera.spec.busyTime());
+    if (shot.taken) {
+        camera.busy.set(time, true);
+    }
+    shot.exposure = time + camera.spec.triggerDelay + camera.spec.exposure / 2.0;
+    camera.pending.push_back(shot);
+}
+
+// At the end of each step: cameras whose busy time is over are free again,
+// and every exposure that happened by now is resolved: which item was in the
+// picture, where, and how blurred. Items are moved back from where they are
+// now to where they were at the exposure, at their present velocity, as for
+// a photocell's trigger.
+void World::updateCameras(double stepEnd) {
+    const auto& bodies = physics_.bodies();
+    for (auto& camera : cameras_) {
+        if (camera.busy.value() && !camera.timing.busyAt(stepEnd)) {
+            camera.busy.set(camera.timing.busyUntil(), false);
+        }
+        const auto& spec = camera.spec;
+        if (spec.conveyor >= conveyors_.size()) {
+            camera.pending.clear();
+            continue;
+        }
+        const auto& conveyor = conveyors_[spec.conveyor];
+        const auto origin = conveyor.beltPoint(0.0F);
+        const auto along = conveyor.direction();
+        const auto side = leftOf(along);
+        while (!camera.pending.empty() && camera.pending.front().exposure <= stepEnd + 1e-12) {
+            auto shot = camera.pending.front();
+            camera.pending.pop_front();
+            float nearest = std::numeric_limits<float>::max();
+            for (const auto& item : items_) {
+                const auto velocity = toGlm(bodies.GetLinearVelocity(item.body));
+                const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))) -
+                                    velocity * static_cast<float>(stepEnd - shot.exposure);
+                const auto offset = center - origin;
+                if (std::abs(glm::dot(offset, side)) > conveyor.spec.width / 2.0F ||
+                    center.y < conveyor.spec.beltHeight) {
+                    continue; // not on this belt
+                }
+                const auto rotation = toGlm(bodies.GetRotation(item.body));
+                const float extent = reach(item.shape, glm::mat3_cast(rotation), item.size / 2.0F, along);
+                const float a = glm::dot(offset, along) - spec.along; // from the middle of the picture
+                if (std::abs(a) - extent >= spec.fieldOfView / 2.0F || std::abs(a) >= nearest) {
+                    continue; // not in the picture, or another one is nearer its middle
+                }
+                nearest = std::abs(a);
+                shot.item = item.id;
+                shot.offset = a;
+                shot.whole = std::abs(a) + extent <= spec.fieldOfView / 2.0F;
+                shot.blur = std::abs(glm::dot(velocity, along)) * static_cast<float>(spec.exposure);
+                shot.itemCenter = center;
+                shot.itemRotation = rotation;
+                shot.itemSize = item.size;
+                shot.itemShape = item.shape;
+            }
+            camera.shots.push_front(shot);
+            if (camera.shots.size() > Camera::kShotHistory) {
+                camera.shots.pop_back();
+            }
+        }
     }
 }
 
@@ -564,7 +704,12 @@ void World::updateSpawners() {
         // same ones are bad every run.
         std::uniform_real_distribution<float> chance(0.0F, 1.0F);
         const bool nok = spec.nokFraction > 0.0F && chance(random_) < spec.nokFraction;
-        spawnItem(position, spec.size, nok ? kNokColor : boxColor(nextItemId_), conveyor.spec.heading, nok);
+        spawnItem(position, spec.size,
+                  nok                        ? kNokColor
+                  : spec.shape == Shape::Tin ? kTinColor
+                                             : boxColor(nextItemId_),
+                  conveyor.spec.heading, nok, spec.shape,
+                  spec.atBeltSpeed ? conveyor.direction() * conveyor.speed : glm::vec3(0.0F));
         ++spawned_;
         spawnedNok_ += nok ? 1 : 0;
 
@@ -630,29 +775,18 @@ void World::updatePhotocells(double stepStart, double stepEnd) {
             const auto half = item.size / 2.0F;
             const auto offset = center - origin;
             const float a = glm::dot(offset, along);
-            const float vertical = reach(rotation, half, {0.0F, 1.0F, 0.0F});
+            const float vertical = reach(item.shape, rotation, half, {0.0F, 1.0F, 0.0F});
             const bool atHeight = center.y - vertical <= beamY && beamY <= center.y + vertical;
             const bool acrossBelt =
-                std::abs(glm::dot(offset, side)) < conveyor.spec.width / 2.0F + reach(rotation, half, side);
+                std::abs(glm::dot(offset, side)) < conveyor.spec.width / 2.0F + reach(item.shape, rotation, half, side);
             if (atHeight && acrossBelt) {
-                const float extent = reach(rotation, half, along);
+                const float extent = reach(item.shape, rotation, half, along);
                 intervals.emplace_back(a - extent, a + extent);
                 owners.push_back(i);
             }
         }
-        const float before = photocell.covered;
-        const float now = beamCoverage(spec.along, spec.beamDiameter, intervals);
-        photocell.covered = now;
-
-        // When, within the step, did the coverage pass `threshold`?
-        const auto crossing = [&](float threshold) {
-            const float fraction = now == before ? 1.0F : (threshold - before) / (now - before);
-            return stepStart + kStep * std::clamp(static_cast<double>(fraction), 0.0, 1.0);
-        };
-        if (!photocell.beam && now > spec.onFraction) {
-            photocell.beam = true;
-            const double beamTime = crossing(spec.onFraction);
-            photocell.pending.push_back(Edge{beamTime + spec.responseTime, true});
+        const auto beamTime = photocell.sense(beamCoverage(spec.along, spec.beamDiameter, intervals), stepStart, kStep);
+        if (beamTime) {
             // The box it's about: the one covering the beam's centre, or the
             // nearest to it.
             Trigger trigger;
@@ -665,25 +799,19 @@ void World::updatePhotocells(double stepStart, double stepEnd) {
                     trigger.item = items_[owners[k]].id;
                 }
             }
-            trigger.beamTime = beamTime;
+            trigger.beamTime = *beamTime;
             photocell.pendingTriggers.push_back(trigger);
-        } else if (photocell.beam && now < spec.offFraction) {
-            photocell.beam = false;
-            photocell.pending.push_back(Edge{crossing(spec.offFraction) + spec.responseTime, false});
         }
 
         // Output changes whose response time has passed by the end of this step.
-        while (!photocell.pending.empty() && photocell.pending.front().time <= stepEnd + 1e-12) {
-            const auto edge = photocell.pending.front();
-            photocell.pending.pop_front();
-            photocell.output.set(edge.time, edge.value);
-            if (!edge.value || photocell.pendingTriggers.empty()) {
+        while (const auto edge = photocell.nextOutput(stepEnd)) {
+            if (!edge->value || photocell.pendingTriggers.empty()) {
                 continue;
             }
             auto trigger = photocell.pendingTriggers.front();
             photocell.pendingTriggers.pop_front();
-            trigger.outputTime = edge.time;
-            trigger.encoderCount = encoderCountAt(spec.conveyor, edge.time);
+            trigger.outputTime = edge->time;
+            trigger.encoderCount = encoderCountAt(spec.conveyor, edge->time);
             const auto it =
                 std::find_if(items_.begin(), items_.end(), [&](const Item& item) { return item.id == trigger.item; });
             if (it != items_.end()) {
@@ -692,11 +820,12 @@ void World::updatePhotocells(double stepStart, double stepEnd) {
                 const auto velocity = toGlm(bodies.GetLinearVelocity(it->body));
                 const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(it->body)));
                 const auto rotation = toGlm(bodies.GetRotation(it->body));
-                trigger.itemCenter = center - velocity * static_cast<float>(stepEnd - edge.time);
+                trigger.itemCenter = center - velocity * static_cast<float>(stepEnd - edge->time);
                 trigger.itemRotation = rotation;
                 trigger.itemSize = it->size;
+                trigger.itemShape = it->shape;
                 trigger.speed = glm::dot(velocity, along);
-                const float extent = reach(glm::mat3_cast(rotation), it->size / 2.0F, along);
+                const float extent = reach(it->shape, glm::mat3_cast(rotation), it->size / 2.0F, along);
                 const float front = glm::dot(trigger.itemCenter - origin, along) + extent;
                 trigger.positionError = front - spec.along;
             }
@@ -715,7 +844,7 @@ std::vector<ItemView> World::items() const {
     for (const auto& item : items_) {
         views.push_back(ItemView{item.id, toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))),
                                  toGlm(bodies.GetRotation(item.body)), item.size, item.color,
-                                 toGlm(bodies.GetLinearVelocity(item.body)), item.nok});
+                                 toGlm(bodies.GetLinearVelocity(item.body)), item.nok, item.shape});
     }
     return views;
 }

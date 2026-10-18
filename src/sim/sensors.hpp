@@ -5,6 +5,7 @@
 #include <deque>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -30,6 +31,10 @@
 namespace fsim {
 
 using ItemId = std::uint64_t;
+
+// What an item is: a box (size: length, height, width), or a tin standing
+// upright (size: diameter, height, diameter).
+enum class Shape { Box, Tin };
 
 struct PhotocellSpec {
     std::string name = "B1";
@@ -60,6 +65,7 @@ struct Trigger {
     glm::vec3 itemCenter{0.0F};
     glm::quat itemRotation{1.0F, 0.0F, 0.0F, 0.0F};
     glm::vec3 itemSize{0.0F};
+    Shape itemShape = Shape::Box;
 };
 
 struct Photocell {
@@ -74,6 +80,16 @@ struct Photocell {
     // rising one, the trigger it will become.
     std::deque<Edge> pending;
     std::deque<Trigger> pendingTriggers;
+
+    // The beam is `coverage` covered at the end of a step that started at
+    // `stepStart`. If that crosses a threshold (with hysteresis), the
+    // crossing time is interpolated within the step and the output change is
+    // queued for after the response time. Returns the crossing time if the
+    // beam just switched on.
+    std::optional<double> sense(float coverage, double stepStart, double step);
+    // The next queued output change that's due by `time`, applied to the
+    // output; nothing if none is.
+    std::optional<Edge> nextOutput(double time);
 };
 
 // How much of a beam, centred at `centre` with diameter `diameter`, the

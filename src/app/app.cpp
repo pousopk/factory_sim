@@ -1,4 +1,5 @@
 #include "app/app.hpp"
+#include "app/widgets.hpp"
 #include "plc/programs.hpp"
 #include "plc/s7_link.hpp"
 #include "plc/soft_plc_program.hpp"
@@ -13,11 +14,6 @@ namespace fsim {
 
 namespace {
 
-const ImVec4 kDim{0.65F, 0.67F, 0.72F, 1.0F};
-const ImVec4 kProblem{0.95F, 0.45F, 0.40F, 1.0F};
-constexpr float kFieldWidth = 180.0F;
-constexpr float kDegrees = 180.0F / std::numbers::pi_v<float>;
-
 const char* turnName(Turn turn) {
     switch (turn) {
     case Turn::Left:
@@ -28,58 +24,6 @@ const char* turnName(Turn turn) {
         break;
     }
     return "straight on";
-}
-
-// A float slider whose value is stored in another unit (ms shown, s stored).
-bool scaledSlider(const char* label, double& value, double scale, float min, float max, const char* format) {
-    float shown = static_cast<float>(value * scale);
-    ImGui::SetNextItemWidth(kFieldWidth);
-    if (ImGui::SliderFloat(label, &shown, min, max, format)) {
-        value = shown / scale;
-        return true;
-    }
-    return false;
-}
-
-bool scaledSlider(const char* label, float& value, float scale, float min, float max, const char* format) {
-    double v = value;
-    const bool changed = scaledSlider(label, v, scale, min, max, format);
-    value = static_cast<float>(v);
-    return changed;
-}
-
-// An address, typed in: red when it isn't an address of the expected kind.
-void addressField(const char* label, std::string& text, IoAddress::Area area, IoAddress::Size size) {
-    const auto address = parseAddress(text);
-    const bool ok =
-        text.empty() || (address && address->area == area && address->size == size && IoImage::fits(*address));
-    if (!ok) {
-        ImGui::PushStyleColor(ImGuiCol_Text, kProblem);
-    }
-    ImGui::SetNextItemWidth(kFieldWidth);
-    ImGui::InputTextWithHint(
-        label, area == IoAddress::Area::Input ? (size == IoAddress::Size::Bit ? "%IX0.0" : "%ID8") : "%QX0.0", &text);
-    if (!ok) {
-        ImGui::PopStyleColor();
-        ImGui::SetItemTooltip("Not a valid %s here",
-                              area == IoAddress::Area::Input
-                                  ? (size == IoAddress::Size::Bit ? "input bit" : "input double word")
-                                  : "output bit");
-    }
-}
-
-// A combo to pick one of the scene's conveyors, by name.
-void conveyorCombo(const char* label, std::size_t& conveyor, const Scene& scene) {
-    ImGui::SetNextItemWidth(kFieldWidth);
-    const auto current = conveyor < scene.conveyors.size() ? scene.conveyors[conveyor].spec.name : std::string("?");
-    if (ImGui::BeginCombo(label, current.c_str())) {
-        for (std::size_t i = 0; i < scene.conveyors.size(); ++i) {
-            if (ImGui::Selectable(scene.conveyors[i].spec.name.c_str(), i == conveyor)) {
-                conveyor = i;
-            }
-        }
-        ImGui::EndCombo();
-    }
 }
 
 } // namespace
@@ -130,6 +74,7 @@ void App::frame(double realSeconds, int width, int height) {
     drawControlPanel();
     drawPlcVariables();
     drawAnalyser();
+    drawCameras();
 
     // An edit is finished when no widget is being used: then it's one undo step, saved at once.
     if (!ImGui::IsAnyItemActive() && history_.commit()) {
@@ -248,6 +193,9 @@ void App::deleteSelected() {
     case Pick::Kind::Bin:
         removeBin(scene(), selected_->index);
         break;
+    case Pick::Kind::Camera:
+        removeCamera(scene(), selected_->index);
+        break;
     case Pick::Kind::None:
         break;
     }
@@ -283,6 +231,9 @@ void App::keepSelectionValid() {
     case Pick::Kind::Bin:
         count = s.bins.size();
         break;
+    case Pick::Kind::Camera:
+        count = s.cameras.size();
+        break;
     case Pick::Kind::None:
         break;
     }
@@ -311,6 +262,8 @@ std::optional<std::size_t> App::selectedConveyor() const {
         return s.stoppers[selected_->index].conveyor;
     case Pick::Kind::Bin:
         return s.bins[selected_->index].conveyor;
+    case Pick::Kind::Camera:
+        return s.cameras[selected_->index].conveyor;
     case Pick::Kind::None:
         break;
     }
@@ -450,6 +403,15 @@ void App::drawLinePanel() {
                    Pick{Pick::Kind::Bin, i});
     }
 
+    if (!s.cameras.empty()) {
+        ImGui::SeparatorText("Cameras");
+    }
+    for (std::size_t i = 0; i < s.cameras.size(); ++i) {
+        const auto& c = s.cameras[i];
+        selectable(fmt::format("{}  camera over {} at {:.3f} m###ca{}", c.name, conveyorName(c.conveyor), c.along, i),
+                   Pick{Pick::Kind::Camera, i});
+    }
+
     ImGui::SeparatorText("Add");
     const auto conveyor = selectedConveyor();
     const bool conveyorSelected = selected_ && selected_->kind == Pick::Kind::Conveyor;
@@ -495,6 +457,11 @@ void App::drawLinePanel() {
         selected_ = Pick{Pick::Kind::Bin, addBin(s, *conveyor)};
     }
     ImGui::SetItemTooltip("Beside the selected conveyor, across from its pusher if it has one");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Camera")) {
+        selected_ = Pick{Pick::Kind::Camera, addCamera(s, *conveyor)};
+    }
+    ImGui::SetItemTooltip("Over the selected conveyor, looking down");
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!selected_);
@@ -533,6 +500,9 @@ void App::drawInspector() {
             break;
         case Pick::Kind::Bin:
             drawBinInspector(selected_->index);
+            break;
+        case Pick::Kind::Camera:
+            drawCameraInspector(selected_->index);
             break;
         case Pick::Kind::None:
             break;
@@ -675,21 +645,38 @@ void App::drawSpawnerInspector(std::size_t index) {
     ImGui::SetItemTooltip("The share of boxes that are bad (NOK, red), chosen at random");
     scaledSlider("every", spawner.interval, 1.0, 0.2F, 5.0F, "%.2f s");
     scaledSlider("jitter", spawner.intervalJitter, 1.0, 0.0F, 1.0F, "± %.2f s");
+    int shape = spawner.shape == Shape::Tin ? 1 : 0;
     ImGui::SetNextItemWidth(kFieldWidth);
-    ImGui::SliderFloat3("size", &spawner.size.x, 0.02F, 0.35F, "%.2f m");
-    ImGui::SetItemTooltip("Length along the belt, height, width");
+    if (ImGui::Combo("makes", &shape, "boxes\0tins\0")) {
+        spawner.shape = shape == 1 ? Shape::Tin : Shape::Box;
+    }
+    ImGui::Checkbox("arriving at belt speed", &spawner.atBeltSpeed);
+    ImGui::SetItemTooltip("As from an infeed conveyor. Off: put down standing still, so the belt has to\n"
+                          "speed them up first, and the spawner waits until there's room.");
+    ImGui::SetNextItemWidth(kFieldWidth);
+    if (spawner.shape == Shape::Tin) {
+        float size[2] = {spawner.size.x, spawner.size.y};
+        if (ImGui::SliderFloat2("size", size, 0.02F, 0.35F, "%.3f m")) {
+            spawner.size = {size[0], size[1], size[0]};
+        }
+        ImGui::SetItemTooltip("Diameter, height");
+    } else {
+        ImGui::SliderFloat3("size", &spawner.size.x, 0.02F, 0.35F, "%.2f m");
+        ImGui::SetItemTooltip("Length along the belt, height, width");
+    }
     const float length = spawner.conveyor < s.conveyors.size() ? s.conveyors[spawner.conveyor].spec.length : 1.0F;
     ImGui::SetNextItemWidth(kFieldWidth);
     ImGui::SliderFloat("where", &spawner.offset, 0.0F, length, "%.2f m from the start");
     if (spawner.conveyor < s.conveyors.size()) {
         const float speed = s.conveyors[spawner.conveyor].spec.targetSpeed;
-        ImGui::TextColored(kDim, "gap between boxes at full speed: %.3f m",
+        ImGui::TextColored(kDim, "gap between them at full speed: %.3f m",
                            speed * static_cast<float>(spawner.interval) - spawner.size.x);
     }
     if (ImGui::Button("Spawn one now") && spawner.conveyor < world_->conveyors().size()) {
         const auto& c = world_->conveyors()[spawner.conveyor];
         world_->spawnItem(c.beltPoint(spawner.offset) + glm::vec3(0.0F, spawner.size.y / 2.0F + 0.002F, 0.0F),
-                          spawner.size, {0.85F, 0.30F, 0.30F}, c.spec.heading);
+                          spawner.size, {0.85F, 0.30F, 0.30F}, c.spec.heading, false, spawner.shape,
+                          spawner.atBeltSpeed ? c.direction() * c.speed : glm::vec3(0.0F));
     }
 }
 
@@ -923,9 +910,12 @@ void App::drawBinInspector(std::size_t index) {
 void App::drawControl() {
     ImGui::SeparatorText("Control");
     auto& s = scene();
+    // In the order of the enum.
     int control = static_cast<int>(s.control);
     ImGui::SetNextItemWidth(kFieldWidth);
-    if (ImGui::Combo("program", &control, "none (by hand)\0built-in sorting\0soft_plc (lockstep)\0S7 PLC (live)\0")) {
+    if (ImGui::Combo("program", &control,
+                     "none (by hand)\0built-in sorting\0soft_plc (lockstep)\0S7 PLC (live)\0"
+                     "built-in camera triggering\0")) {
         s.control = static_cast<Control>(control);
     }
     ImGui::SetItemTooltip("What drives the valves and motors, scan by scan (every 10 ms), through the I/O:\n"
@@ -945,6 +935,12 @@ void App::drawControl() {
     }
     ImGui::SetItemTooltip("ladder_editor's conveyor program, run by soft_plc, on a line wired to its addresses.\n"
                           "Press Start on the control panel. ladder_editor can go online with --connect=5020.");
+    if (ImGui::SmallButton("Load the tin demo")) {
+        s = tinDemo();
+        selected_.reset();
+    }
+    ImGui::SetItemTooltip("Tins at 1 m/s, one photocell triggering four cameras; the fourth, further on,\n"
+                          "through a timer in the PLC. Watch the Cameras window.");
     if (!programError_.empty()) {
         ImGui::PushTextWrapPos(0.0F);
         ImGui::TextColored(kProblem, "%s", programError_.c_str());
@@ -955,6 +951,10 @@ void App::drawControl() {
         return;
     }
 
+    if (s.control == Control::BuiltInCameras) {
+        drawCameraTriggering();
+        return;
+    }
     if (s.control != Control::BuiltInSorting) {
         return;
     }
@@ -1059,6 +1059,10 @@ void App::drawIoTable() {
         actuator(a, "diverter");
     for (const auto& a : s.stoppers)
         actuator(a, "stopper");
+    for (const auto& c : s.cameras) {
+        add(c.triggerOutput, c.name + " camera trigger");
+        add(c.readyInput, c.name + " camera ready");
+    }
     for (const auto& b : s.buttons)
         add(b.address, b.name + (b.normallyClosed ? " button (NC)" : " button"));
     for (const auto& l : s.lamps)

@@ -1,3 +1,4 @@
+#include "analysis/tin_study.hpp"
 #include "core/process_image.hpp"
 #include "monitor/monitor_client.hpp"
 #include "plc/programs.hpp"
@@ -160,4 +161,40 @@ TEST_CASE("ladder_editor's conveyor program runs the simulated conveyor") {
     world->press(1, false);
     world->run(2.0);
     CHECK(world->conveyors()[0].speed == 0.0F);
+}
+
+TEST_CASE("The tin line's triggering in ST, run by soft_plc, triggers the cameras exactly as the built-in one") {
+    const auto builtIn = tinDemo();
+    auto st = builtIn;
+    st.control = Control::SoftPlc;
+    st.plcProgram = "tin_cameras.st";
+    const ProgramMaker make = [](const Scene& s) {
+        auto made = makeAnyProgram(s, FACTORY_SIM_SOURCE_DIR "/examples");
+        REQUIRE_MESSAGE(made.program != nullptr, made.error);
+        return std::move(made.program);
+    };
+    auto a = buildWorld(builtIn);
+    auto b = buildWorld(st, make);
+    a->run(10.0);
+    b->run(10.0);
+    for (std::size_t c = 0; c < 4; ++c) {
+        CAPTURE(c);
+        const auto& x = a->cameras()[c].shots;
+        const auto& y = b->cameras()[c].shots;
+        REQUIRE(x.size() == y.size());
+        for (std::size_t i = 0; i < x.size(); ++i) {
+            CHECK(x[i].triggerTime == y[i].triggerTime);
+            CHECK(x[i].taken == y[i].taken);
+        }
+    }
+    const auto* plc = dynamic_cast<const SoftPlcProgram*>(b->program());
+    REQUIRE(plc != nullptr);
+    const auto* triggering = dynamic_cast<const CameraTriggering*>(a->program());
+    const auto variables = plc->variables();
+    const auto lost =
+        std::find_if(variables.begin(), variables.end(), [](const auto& v) { return v.path == "k4Lost"; });
+    REQUIRE(lost != variables.end());
+    CHECK(lost->value == std::to_string(triggering->status()[3].lost));
+    // And the gap study, run with the ST program, finds the same answer.
+    CHECK(minimumGap(sweepGaps(st, 0.06, 0.12, 0.005, make)) == minimumGap(sweepGaps(builtIn, 0.06, 0.12, 0.005)));
 }

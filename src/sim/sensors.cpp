@@ -33,6 +33,38 @@ float beamCoverage(float centre, float diameter, std::vector<std::pair<float, fl
     return std::clamp(covered / diameter, 0.0F, 1.0F);
 }
 
+std::optional<double> Photocell::sense(float coverage, double stepStart, double step) {
+    const float before = covered;
+    covered = coverage;
+    // When, within the step, did the coverage pass `threshold`? It changes
+    // evenly within one step, since items move evenly.
+    const auto crossing = [&](float threshold) {
+        const float fraction = coverage == before ? 1.0F : (threshold - before) / (coverage - before);
+        return stepStart + step * std::clamp(static_cast<double>(fraction), 0.0, 1.0);
+    };
+    if (!beam && coverage > spec.onFraction) {
+        beam = true;
+        const double beamTime = crossing(spec.onFraction);
+        pending.push_back(Edge{beamTime + spec.responseTime, true});
+        return beamTime;
+    }
+    if (beam && coverage < spec.offFraction) {
+        beam = false;
+        pending.push_back(Edge{crossing(spec.offFraction) + spec.responseTime, false});
+    }
+    return std::nullopt;
+}
+
+std::optional<Edge> Photocell::nextOutput(double time) {
+    if (pending.empty() || pending.front().time > time + 1e-12) {
+        return std::nullopt;
+    }
+    const auto edge = pending.front();
+    pending.pop_front();
+    output.set(edge.time, edge.value);
+    return edge;
+}
+
 double EncoderSpec::pulsesPerMetre() const {
     return static_cast<double>(pulsesPerRevolution) / (std::numbers::pi * static_cast<double>(rollerDiameter));
 }

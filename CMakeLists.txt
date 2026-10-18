@@ -90,6 +90,7 @@ add_library(factory_sim_core STATIC
   src/sim/world.cpp
   src/sim/signal.cpp
   src/sim/sensors.cpp
+  src/sim/camera.cpp
   src/sim/scene.cpp
   src/sim/actuators.cpp
   src/sim/io.cpp
@@ -122,6 +123,7 @@ add_library(factory_sim_view STATIC
   src/render/orbit_camera.cpp
   src/edit/scene_history.cpp
   src/analysis/analysis.cpp
+  src/analysis/tin_study.cpp
 )
 target_include_directories(factory_sim_view PUBLIC src)
 target_link_libraries(factory_sim_view PUBLIC factory_sim_core PRIVATE fmt::fmt)
@@ -156,6 +158,8 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/main.cpp
     src/app/app.cpp
     src/app/analyser.cpp
+    src/app/cameras.cpp
+    src/app/widgets.cpp
     src/render/shader.cpp
     src/render/renderer.cpp
   )

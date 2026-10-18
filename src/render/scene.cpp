@@ -22,6 +22,10 @@ const glm::vec3 kPaddleColor{0.20F, 0.45F, 0.75F};
 const glm::vec3 kArmColor{0.20F, 0.60F, 0.45F};
 const glm::vec3 kBladeColor{0.75F, 0.25F, 0.20F};
 const glm::vec3 kBinColor{0.30F, 0.42F, 0.35F};
+const glm::vec3 kCameraColor{0.15F, 0.16F, 0.18F};
+const glm::vec3 kLensColor{0.05F, 0.05F, 0.06F};
+const glm::vec3 kViewColor{0.35F, 0.60F, 1.00F};
+const glm::vec3 kPostColor{0.55F, 0.57F, 0.60F};
 
 DrawBox fromPose(const Pose& pose, glm::vec3 color) {
     DrawBox box;
@@ -182,6 +186,58 @@ std::vector<DrawBox> binBoxes(const Bin& bin, const ConveyorSpec& conveyor) {
     return boxes;
 }
 
+std::vector<DrawBox> cameraBoxes(const Camera& camera, const Conveyor& conveyor, double now) {
+    const auto& spec = camera.spec;
+    const auto along = conveyor.direction();
+    const auto left = leftOf(along);
+    const auto target = conveyor.beltPoint(spec.along); // the middle of the picture, on the belt
+    // Looking at the target from `distance` away, turned by the tilt around
+    // the direction of travel: straight down at 0, from the left above 0.
+    constexpr float distance = 0.40F;
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    const auto toCamera = up * std::cos(spec.tilt) + left * std::sin(spec.tilt);
+    const auto body = target + toCamera * distance;
+    // The body's axes: x along the travel, y towards the belt's centre line.
+    const auto rotation = glm::quat_cast(glm::mat3(along, toCamera, glm::cross(along, toCamera)));
+    const auto heading = glm::angleAxis(conveyor.spec.heading, up);
+
+    std::vector<DrawBox> boxes;
+    boxes.push_back(DrawBox{body, rotation, glm::vec3(0.07F, 0.10F, 0.06F), kCameraColor});
+    boxes.push_back(DrawBox{body - toCamera * 0.065F, rotation, glm::vec3(0.035F, 0.03F, 0.035F), kLensColor});
+    // The LED on its back: lit while busy.
+    boxes.push_back(DrawBox{body + toCamera * 0.052F, rotation, glm::vec3(0.012F, 0.006F, 0.012F),
+                            camera.busy.value() ? kLedOn : kLedOff, 0.0F, 0.0F, 1.0F, true});
+    // A post beside the belt, up to the camera's height, and an arm across to it.
+    const float outward = std::abs(spec.tilt) < 0.3F ? 1.0F : (spec.tilt > 0.0F ? 1.0F : -1.0F);
+    const auto foot = conveyor.beltPoint(spec.along) + left * outward * (conveyor.spec.width / 2.0F + 0.12F);
+    const float top = body.y + 0.06F;
+    boxes.push_back(DrawBox{glm::vec3(foot.x, top / 2.0F, foot.z), heading, glm::vec3(0.03F, top, 0.03F), kPostColor});
+    const auto armEnd = glm::vec3(body.x, top, body.z);
+    const auto armStart = glm::vec3(foot.x, top, foot.z);
+    const float armLength = glm::length(armEnd - armStart);
+    if (armLength > 0.01F) {
+        boxes.push_back(
+            DrawBox{(armStart + armEnd) / 2.0F, heading, glm::vec3(0.025F, 0.025F, armLength + 0.03F), kPostColor});
+    }
+    // What it sees: a see-through patch on the belt.
+    auto color = kViewColor;
+    float alpha = 0.20F;
+    if (!camera.shots.empty()) {
+        const auto& last = camera.shots.front();
+        const double since = now - last.exposure;
+        if (last.taken && since < 0.12) {
+            color = glm::vec3(1.0F);
+            alpha = 0.55F;
+        } else if (!last.taken && since < 0.35) {
+            color = glm::vec3(1.0F, 0.15F, 0.10F);
+            alpha = 0.55F;
+        }
+    }
+    boxes.push_back(DrawBox{target + glm::vec3(0.0F, 0.002F, 0.0F), heading,
+                            glm::vec3(spec.fieldOfView, 0.002F, conveyor.spec.width), color, 0.0F, 0.0F, alpha, true});
+    return boxes;
+}
+
 std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& conveyor) {
     const auto rotation = glm::angleAxis(conveyor.spec.heading, glm::vec3(0.0F, 1.0F, 0.0F));
     const auto along = conveyor.direction();
@@ -244,20 +300,47 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
             addParts(boxes, spawnerBoxes(spawner, conveyors[spawner.conveyor]), Pick{Pick::Kind::Spawner, i}, selected);
         }
     }
+    for (std::size_t i = 0; i < world.cameras().size(); ++i) {
+        const auto& camera = world.cameras()[i];
+        if (onConveyor(camera.spec.conveyor)) {
+            addParts(boxes, cameraBoxes(camera, conveyors[camera.spec.conveyor], world.time()),
+                     Pick{Pick::Kind::Camera, i}, selected);
+        }
+    }
     for (const auto& item : world.items()) {
-        boxes.push_back(DrawBox{item.position, item.rotation, item.size, item.color});
+        DrawBox box{item.position, item.rotation, item.size, item.color};
+        box.round = item.shape == Shape::Tin;
+        boxes.push_back(box);
+    }
+    for (const auto& camera : world.cameras()) {
+        if (!camera.shots.empty()) {
+            const auto& shot = camera.shots.front();
+            if (shot.taken && shot.item != 0 && world.time() - shot.exposure < ghostSeconds) {
+                DrawBox ghost{shot.itemCenter,
+                              shot.itemRotation,
+                              shot.itemSize + glm::vec3(0.002F),
+                              {0.6F, 0.8F, 1.0F},
+                              0.0F,
+                              0.0F,
+                              0.30F};
+                ghost.round = shot.itemShape == Shape::Tin;
+                boxes.push_back(ghost);
+            }
+        }
     }
     for (const auto& photocell : world.photocells()) {
         if (!photocell.triggers.empty()) {
             const auto& trigger = photocell.triggers.front();
             if (world.time() - trigger.outputTime < ghostSeconds && trigger.itemSize != glm::vec3(0.0F)) {
-                boxes.push_back(DrawBox{trigger.itemCenter,
-                                        trigger.itemRotation,
-                                        trigger.itemSize + glm::vec3(0.002F),
-                                        {1.0F, 1.0F, 1.0F},
-                                        0.0F,
-                                        0.0F,
-                                        0.35F});
+                DrawBox ghost{trigger.itemCenter,
+                              trigger.itemRotation,
+                              trigger.itemSize + glm::vec3(0.002F),
+                              {1.0F, 1.0F, 1.0F},
+                              0.0F,
+                              0.0F,
+                              0.35F};
+                ghost.round = trigger.itemShape == Shape::Tin;
+                boxes.push_back(ghost);
             }
         }
     }

@@ -7,15 +7,16 @@
 
 // What to draw, worked out from the simulation: a list of coloured boxes.
 //
-// Everything in the scene is a box: a conveyor's belt, its side frames and
-// legs, and the items it carries. Turning the World into this list is plain
+// Everything in the scene is a box (a conveyor's belt, its side frames and
+// legs, the items it carries), except tins, which are round: a box marked
+// `round` is drawn as the cylinder that fits in it, standing on its y axis. Turning the World into this list is plain
 // geometry, with no OpenGL, so it's tested like the simulation; the renderer
 // only draws what the list says.
 namespace fsim {
 
 // What a drawn box belongs to, so a click can select it.
 struct Pick {
-    enum class Kind { None, Conveyor, Photocell, Spawner, Pusher, Diverter, Stopper, Bin };
+    enum class Kind { None, Conveyor, Photocell, Spawner, Pusher, Diverter, Stopper, Bin, Camera };
     Kind kind = Kind::None;
     std::size_t index = 0;
 
@@ -36,6 +37,7 @@ struct DrawBox {
     bool unlit = false;     // a light source (a beam, an LED): its colour as it is, no shading
     Pick pick{};            // what it belongs to (None: can't be selected)
     bool highlight = false; // part of the selection
+    bool round = false;     // a cylinder (a tin): size.x is its diameter, size.y its height
 };
 
 // The parts of one conveyor: belt, two side frames, legs at both ends.
@@ -54,12 +56,19 @@ std::vector<DrawBox> diverterBoxes(const Diverter& diverter, const ConveyorSpec&
 std::vector<DrawBox> stopperBoxes(const Stopper& stopper, const ConveyorSpec& conveyor);
 std::vector<DrawBox> binBoxes(const Bin& bin, const ConveyorSpec& conveyor);
 
+// A camera: its body and lens, looking at the belt from where its tilt puts
+// it, on a post; its LED, lit while it's busy; and its field of view on the
+// belt, which flashes white when it takes a picture and red when it ignores
+// a trigger. `now` is the simulated time, for the flashes.
+std::vector<DrawBox> cameraBoxes(const Camera& camera, const Conveyor& conveyor, double now);
+
 // A spawner: a gate over the belt where its boxes appear.
 std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& conveyor);
 
 // Everything: every conveyor's parts, the photocells and spawners, every
 // item, and a see-through "ghost" of each photocell's last triggered box
-// where it was at the output time, for `ghostSeconds` after it. The parts
+// where it was at the output time, for `ghostSeconds` after it (and of
+// each camera's last picture, where the item was in it). The parts
 // of `selected` are highlighted.
 std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds = 1.0,
                                 std::optional<Pick> selected = std::nullopt);

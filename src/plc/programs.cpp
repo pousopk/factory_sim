@@ -24,6 +24,7 @@ MadeProgram makeAnyProgram(const Scene& scene, const std::filesystem::path& scen
         return {std::make_unique<S7Link>(scene.s7Host, static_cast<std::uint16_t>(scene.s7Port)), {}};
     case Control::Manual:
     case Control::BuiltInSorting:
+    case Control::BuiltInCameras:
         break;
     }
     return {makeProgram(scene), {}};

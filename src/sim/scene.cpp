@@ -120,8 +120,9 @@ Scene sortingDemo() {
 }
 
 bool sameControl(const Scene& a, const Scene& b) {
-    return a.control == b.control && a.sorters == b.sorters && a.plcProgram == b.plcProgram &&
-           a.monitorPort == b.monitorPort && a.s7Host == b.s7Host && a.s7Port == b.s7Port;
+    return a.control == b.control && a.sorters == b.sorters && a.cameraTriggers == b.cameraTriggers &&
+           a.plcProgram == b.plcProgram && a.monitorPort == b.monitorPort && a.s7Host == b.s7Host &&
+           a.s7Port == b.s7Port;
 }
 
 Scene conveyorDemo(std::string program) {
@@ -163,9 +164,57 @@ Scene conveyorDemo(std::string program) {
     return scene;
 }
 
+Scene tinDemo() {
+    Scene scene;
+    PlacedConveyor conveyor;
+    conveyor.spec.name = "C1";
+    conveyor.spec.length = 3.0F;
+    conveyor.spec.width = 0.12F;
+    conveyor.spec.targetSpeed = 1.0F;
+    conveyor.spec.acceleration = 2.0F;
+    conveyor.spec.guideLeft = true;
+    conveyor.spec.guideRight = true;
+    conveyor.spec.encoderInput = "%ID8";
+    scene.conveyors.push_back(conveyor);
+    // Tins 73 mm across, 110 mm high, every 0.2 s give or take 0.08 s: at
+    // 1 m/s, 0.12 to 0.28 m apart, centre to centre.
+    SpawnerSpec spawner;
+    spawner.shape = Shape::Tin;
+    spawner.size = {0.073F, 0.11F, 0.073F};
+    spawner.interval = 0.2;
+    spawner.intervalJitter = 0.08;
+    spawner.atBeltSpeed = true;
+    scene.spawners.push_back(spawner);
+    PhotocellSpec photocell;
+    photocell.name = "B1";
+    photocell.along = 1.2F;
+    photocell.input = "%IX0.0";
+    scene.photocells.push_back(photocell);
+    // Three cameras around the tin where it is when the photocell triggers
+    // (from above, the left and the right), and a fourth 15 cm further on,
+    // where there was room for it.
+    const struct {
+        const char* name;
+        float along;
+        float tilt;
+    } cameras[] = {{"K1", 1.17F, 0.0F}, {"K2", 1.17F, 0.9F}, {"K3", 1.17F, -0.9F}, {"K4", 1.32F, 0.0F}};
+    for (const auto& c : cameras) {
+        const auto index = addCamera(scene, 0);
+        scene.cameras[index].name = c.name;
+        scene.cameras[index].along = c.along;
+        scene.cameras[index].tilt = c.tilt;
+        scene.cameraTriggers.push_back(triggerFor(scene, 0, index));
+    }
+    scene.control = Control::BuiltInCameras;
+    return scene;
+}
+
 std::unique_ptr<ControlProgram> makeProgram(const Scene& scene) {
     if (scene.control == Control::BuiltInSorting) {
         return std::make_unique<BuiltInSorting>(scene.sorters);
+    }
+    if (scene.control == Control::BuiltInCameras) {
+        return std::make_unique<CameraTriggering>(scene.cameraTriggers);
     }
     return nullptr;
 }
@@ -195,6 +244,10 @@ std::vector<IoAddress> usedAddresses(const Scene& scene) {
     std::for_each(scene.pushers.begin(), scene.pushers.end(), actuator);
     std::for_each(scene.diverters.begin(), scene.diverters.end(), actuator);
     std::for_each(scene.stoppers.begin(), scene.stoppers.end(), actuator);
+    for (const auto& c : scene.cameras) {
+        add(c.triggerOutput);
+        add(c.readyInput);
+    }
     for (const auto& b : scene.buttons) {
         add(b.address);
     }
@@ -272,6 +325,44 @@ SorterSpec sorterFor(const Scene& scene, std::size_t photocell, std::size_t push
     sorter.extendedInput = paddle.extendedInput;
     sorter.distance = std::max<std::int64_t>(0, std::llround(metres * conveyor.encoder.pulsesPerMetre()));
     return sorter;
+}
+
+// The delay from the photocell's edge to a camera's trigger, so the item is
+// in the middle of the picture. The photocell switches when the item's
+// front reaches the beam, so its centre is half an item before it; it has to
+// travel from there to the middle of the picture:
+//
+//   delay = (camera - photocell + item length / 2) / speed - 6 ms
+//
+// The 6 ms is what's already on the way on average: the photocell's 1 ms
+// response and half a 10 ms scan before the PLC sees the edge. Like the
+// sorter's distance, it's only right at the belt's set speed.
+//
+// And it's rounded to whole scans: the program looks at its timer once per
+// scan, so a timer can only end on one. 151 ms really becomes 160, and the
+// item is 9 mm late at 1 m/s; 150 is right on time. (A delay under half a
+// scan becomes none: 2 ms would really be 10.)
+CameraTriggerSpec triggerFor(const Scene& scene, std::size_t photocell, std::size_t camera) {
+    const auto& sensor = scene.photocells.at(photocell);
+    const auto& spec = scene.cameras.at(camera);
+    const auto& conveyor = scene.conveyors.at(spec.conveyor).spec;
+    float itemLength = 0.2F;
+    for (const auto& spawner : scene.spawners) {
+        if (spawner.conveyor == spec.conveyor) {
+            itemLength = spawner.size.x;
+        }
+    }
+    CameraTriggerSpec trigger;
+    trigger.name = spec.name;
+    trigger.sensorInput = sensor.input;
+    trigger.triggerOutput = spec.triggerOutput;
+    if (conveyor.targetSpeed > 0.0F) {
+        const double travel = spec.along - sensor.along + itemLength / 2.0F;
+        const double delay = travel / conveyor.targetSpeed - (sensor.responseTime + 0.005);
+        const double scan = World::kStep * World::kScanSteps;
+        trigger.delay = std::max(0.0, std::round(delay / scan) * scan);
+    }
+    return trigger;
 }
 
 std::vector<ConveyorSpec> placeConveyors(const Scene& scene) {
@@ -353,9 +444,8 @@ std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make) 
         if (exists(bin.conveyor))
             world->addBin(bin);
     }
-    for (const auto& bin : scene.bins) {
-        if (exists(bin.conveyor))
-            world->addBin(bin);
+    for (const auto& camera : scene.cameras) {
+        world->addCamera(camera); // (one on a missing conveyor sees nothing)
     }
     world->setPanel(scene.buttons, scene.lamps);
     world->setProgram(make(scene));
@@ -371,6 +461,7 @@ void applyLive(World& world, const Scene& scene) {
     world.setSpawners(scene.spawners);
     world.setStrokes(scene.pushers, scene.diverters, scene.stoppers);
     world.setPanel(scene.buttons, scene.lamps);
+    world.setCameras(scene.cameras);
 }
 
 // ---------------------------------------------------------------- Editing
@@ -440,6 +531,7 @@ void removeConveyor(Scene& scene, std::size_t conveyor) {
     dropFrom(scene.diverters, conveyor);
     dropFrom(scene.stoppers, conveyor);
     dropFrom(scene.bins, conveyor);
+    dropFrom(scene.cameras, conveyor);
 }
 
 std::size_t addPusher(Scene& scene, std::size_t conveyor) {
@@ -508,6 +600,21 @@ void removeStopper(Scene& scene, std::size_t index) {
 }
 void removeBin(Scene& scene, std::size_t index) {
     eraseAt(scene.bins, index);
+}
+
+std::size_t addCamera(Scene& scene, std::size_t conveyor) {
+    CameraSpec camera;
+    camera.name = freeName(scene.cameras, "K", [](const CameraSpec& c) { return c.name; });
+    camera.conveyor = conveyor;
+    camera.along = scene.conveyors.at(conveyor).spec.length * 0.6F;
+    camera.triggerOutput = freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Bit);
+    camera.readyInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
+    scene.cameras.push_back(camera);
+    return scene.cameras.size() - 1;
+}
+
+void removeCamera(Scene& scene, std::size_t index) {
+    eraseAt(scene.cameras, index);
 }
 
 std::size_t addPhotocell(Scene& scene, std::size_t conveyor) {
@@ -581,6 +688,8 @@ template <class Spec> void ioFromJson(const json& j, Spec& s) {
 
 const char* controlName(Control control) {
     switch (control) {
+    case Control::BuiltInCameras:
+        return "built-in camera triggering";
     case Control::BuiltInSorting:
         return "built-in sorting";
     case Control::SoftPlc:
@@ -594,7 +703,7 @@ const char* controlName(Control control) {
 }
 
 Control controlFrom(const std::string& name) {
-    for (const auto control : {Control::BuiltInSorting, Control::SoftPlc, Control::S7Plc}) {
+    for (const auto control : {Control::BuiltInSorting, Control::SoftPlc, Control::S7Plc, Control::BuiltInCameras}) {
         if (name == controlName(control)) {
             return control;
         }
@@ -672,7 +781,9 @@ std::string sceneToJson(const Scene& scene) {
                                     {"size", vec3(s.size)},
                                     {"offset", s.offset},
                                     {"enabled", s.enabled},
-                                    {"nokFraction", s.nokFraction}});
+                                    {"nokFraction", s.nokFraction},
+                                    {"shape", s.shape == Shape::Tin ? "tin" : "box"},
+                                    {"atBeltSpeed", s.atBeltSpeed}});
     }
     for (const auto& p : scene.pushers) {
         json entry = {{"name", p.name},           {"conveyor", p.conveyor},         {"along", p.along},
@@ -702,6 +813,20 @@ std::string sceneToJson(const Scene& scene) {
                                 {"side", sideName(b.side)},
                                 {"size", vec3(b.size)}});
     }
+    data["cameras"] = json::array();
+    for (const auto& c : scene.cameras) {
+        data["cameras"].push_back({{"name", c.name},
+                                   {"conveyor", c.conveyor},
+                                   {"along", c.along},
+                                   {"fieldOfView", c.fieldOfView},
+                                   {"pixels", c.pixels},
+                                   {"tilt", c.tilt},
+                                   {"triggerDelay", c.triggerDelay},
+                                   {"exposure", c.exposure},
+                                   {"readout", c.readout},
+                                   {"triggerOutput", c.triggerOutput},
+                                   {"readyInput", c.readyInput}});
+    }
     data["buttons"] = json::array();
     for (const auto& b : scene.buttons) {
         data["buttons"].push_back(
@@ -719,6 +844,14 @@ std::string sceneToJson(const Scene& scene) {
                                    {"valveOutput", s.valveOutput},
                                    {"extendedInput", s.extendedInput},
                                    {"distance", s.distance}});
+    }
+    data["cameraTriggers"] = json::array();
+    for (const auto& t : scene.cameraTriggers) {
+        data["cameraTriggers"].push_back({{"name", t.name},
+                                          {"sensorInput", t.sensorInput},
+                                          {"triggerOutput", t.triggerOutput},
+                                          {"delay", t.delay},
+                                          {"method", t.method == DelayMethod::Timer ? "timer" : "per item"}});
     }
     data["control"] = controlName(scene.control);
     data["plcProgram"] = scene.plcProgram;
@@ -801,6 +934,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             spawner.offset = s.value("offset", spawner.offset);
             spawner.enabled = s.value("enabled", spawner.enabled);
             spawner.nokFraction = s.value("nokFraction", spawner.nokFraction);
+            spawner.shape = s.value("shape", std::string("box")) == "tin" ? Shape::Tin : Shape::Box;
+            spawner.atBeltSpeed = s.value("atBeltSpeed", false);
             if (auto ok = checkConveyor(spawner.conveyor, "a spawner"); !ok) {
                 return tl::unexpected(ok.error());
             }
@@ -859,6 +994,24 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             }
             scene.bins.push_back(b);
         }
+        for (const auto& j : data.value("cameras", json::array())) {
+            CameraSpec c;
+            c.name = j.value("name", c.name);
+            c.conveyor = j.value("conveyor", c.conveyor);
+            c.along = j.value("along", c.along);
+            c.fieldOfView = j.value("fieldOfView", c.fieldOfView);
+            c.pixels = j.value("pixels", c.pixels);
+            c.tilt = j.value("tilt", c.tilt);
+            c.triggerDelay = j.value("triggerDelay", c.triggerDelay);
+            c.exposure = j.value("exposure", c.exposure);
+            c.readout = j.value("readout", c.readout);
+            c.triggerOutput = j.value("triggerOutput", std::string());
+            c.readyInput = j.value("readyInput", std::string());
+            if (auto ok = checkConveyor(c.conveyor, "camera " + c.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.cameras.push_back(c);
+        }
         for (const auto& j : data.value("buttons", json::array())) {
             ButtonSpec b;
             b.name = j.value("name", b.name);
@@ -882,6 +1035,16 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             s.extendedInput = j.value("extendedInput", s.extendedInput);
             s.distance = j.value("distance", s.distance);
             scene.sorters.push_back(s);
+        }
+        for (const auto& j : data.value("cameraTriggers", json::array())) {
+            CameraTriggerSpec t;
+            t.name = j.value("name", t.name);
+            t.sensorInput = j.value("sensorInput", t.sensorInput);
+            t.triggerOutput = j.value("triggerOutput", t.triggerOutput);
+            t.delay = j.value("delay", t.delay);
+            t.method =
+                j.value("method", std::string("timer")) == "per item" ? DelayMethod::PerItem : DelayMethod::Timer;
+            scene.cameraTriggers.push_back(t);
         }
         scene.control = controlFrom(data.value("control", std::string("manual")));
         scene.plcProgram = data.value("plcProgram", std::string());

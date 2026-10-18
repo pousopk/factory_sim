@@ -1,5 +1,6 @@
 #pragma once
 #include "sim/actuators.hpp"
+#include "sim/camera.hpp"
 #include "sim/control.hpp"
 #include "sim/conveyor_spec.hpp"
 #include "sim/io.hpp"
@@ -44,6 +45,10 @@ struct SpawnerSpec {
     float offset = 0.2F;               // where boxes appear, metres from the belt's start
     bool enabled = true;
     float nokFraction = 0.0F; // the share of boxes that are bad (NOK), at random: 0.25 = one in four
+    Shape shape = Shape::Box; // a tin: size is diameter, height, diameter
+    // Items arrive already moving with the belt, as from an infeed conveyor,
+    // instead of being put down on it standing still.
+    bool atBeltSpeed = false;
 
     bool operator==(const SpawnerSpec&) const = default;
 };
@@ -57,6 +62,7 @@ struct ItemView {
     glm::vec3 color;
     glm::vec3 velocity;
     bool nok = false; // a bad box, to be sorted out
+    Shape shape = Shape::Box;
 };
 
 // The simulated factory: conveyors, boxes on them, and time.
@@ -115,7 +121,8 @@ public:
     void setStrokes(const std::vector<PusherSpec>& pushers, const std::vector<DiverterSpec>& diverters,
                     const std::vector<StopperSpec>& stoppers);
 
-    ItemId spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading = 0.0F, bool nok = false);
+    ItemId spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading = 0.0F, bool nok = false,
+                     Shape shape = Shape::Box, glm::vec3 velocity = glm::vec3(0.0F));
     void removeItem(ItemId id);
     void clearItems(); // removes every item
 
@@ -166,6 +173,18 @@ public:
     void press(std::size_t button, bool down);
     bool lit(std::size_t lamp) const;
 
+    // ---- Cameras
+    //
+    // Triggered by the PLC through their trigger output (a rising edge, at a
+    // scan), or by hand with triggerCamera. Their "ready" line is an input.
+    std::size_t addCamera(const CameraSpec& spec);
+    // New settings while running; a camera that stays on its conveyor keeps
+    // its history.
+    void setCameras(const std::vector<CameraSpec>& specs);
+    std::vector<Camera>& cameras() { return cameras_; }
+    const std::vector<Camera>& cameras() const { return cameras_; }
+    void triggerCamera(std::size_t camera); // now, by hand
+
     std::vector<Bin>& bins() { return bins_; }
     const std::vector<Bin>& bins() const { return bins_; }
 
@@ -187,6 +206,7 @@ private:
         glm::vec3 color;
         double onFloorSince = -1.0; // when it came to rest on the floor, or -1
         bool nok = false;
+        Shape shape = Shape::Box;
     };
     struct SpawnerState {
         double nextSpawn = 0.0;
@@ -201,6 +221,8 @@ private:
     void updatePhotocells(double stepStart, double stepEnd);
     void updateActuators(double stepStart, double stepEnd);
     void updateBins();
+    void updateCameras(double stepEnd);
+    void cameraTrigger(Camera& camera, double time);
     void scan(double time);
     JPH::BodyID addKinematic(const Pose& pose, float friction);
     JPH::BodyID addStatic(const Pose& pose, float friction);
@@ -217,6 +239,7 @@ private:
     std::vector<Diverter> diverters_;
     std::vector<Stopper> stoppers_;
     std::vector<Bin> bins_;
+    std::vector<Camera> cameras_;
     IoImage io_;
     std::unique_ptr<ControlProgram> program_;
     std::vector<ButtonSpec> buttons_;

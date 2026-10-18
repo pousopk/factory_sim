@@ -1,6 +1,8 @@
 #include "render/renderer.hpp"
 #include <array>
+#include <cmath>
 #include <glm/gtc/matrix_transform.hpp>
+#include <vector>
 
 namespace fsim {
 
@@ -37,6 +39,7 @@ uniform float uStripeOffset;
 uniform float uAlpha;
 uniform float uUnlit;         // 1: a light source, not shaded
 uniform float uHighlight;     // 1: part of the selection
+uniform float uRound;         // 1: a cylinder (a tin), not a box
 out vec4 fragColor;
 
 const vec3 kSun = normalize(vec3(0.4, 1.0, 0.3));
@@ -57,6 +60,11 @@ void main() {
     vec3 toEdge = 0.5 * uSize - abs(vLocal);
     vec3 n = abs(vLocalNormal);
     float edge = n.x > 0.5 ? min(toEdge.y, toEdge.z) : n.y > 0.5 ? min(toEdge.x, toEdge.z) : min(toEdge.x, toEdge.y);
+    if (uRound > 0.5) {
+        // A cylinder's only edges are its rims: on the side, the distance to
+        // the top or bottom; on a lid, to the round edge.
+        edge = n.y > 0.5 ? 0.5 * uSize.x - length(vLocal.xz) : toEdge.y;
+    }
     color *= mix(0.55, 1.0, smoothstep(0.0, 0.006, edge));
     // Light: a sun, plus a sky light that's brighter from above.
     vec3 normal = normalize(vNormal);
@@ -129,19 +137,64 @@ std::array<float, 216> cubeVertices() {
     return data;
 }
 
-} // namespace
+// A cylinder of diameter 1 and height 1 around the y axis, centred on the
+// origin like the cube: `kCylinderSegments` flat sides (with normals
+// pointing straight out, so the light makes it look round) and two lids.
+constexpr int kCylinderSegments = 32;
 
-Renderer::Renderer() : boxShader_(kBoxVertex, kBoxFragment), floorShader_(kFloorVertex, kFloorFragment) {
-    const auto cube = cubeVertices();
-    glGenVertexArrays(1, &cubeArray_);
-    glGenBuffers(1, &cubeBuffer_);
-    glBindVertexArray(cubeArray_);
-    glBindBuffer(GL_ARRAY_BUFFER, cubeBuffer_);
-    glBufferData(GL_ARRAY_BUFFER, sizeof cube, cube.data(), GL_STATIC_DRAW);
+std::vector<float> cylinderVertices() {
+    std::vector<float> data;
+    const auto add = [&](glm::vec3 p, glm::vec3 n) { data.insert(data.end(), {p.x, p.y, p.z, n.x, n.y, n.z}); };
+    const auto rim = [](int i) {
+        const float a = 2.0F * 3.14159265F * static_cast<float>(i) / kCylinderSegments;
+        return glm::vec3(0.5F * std::cos(a), 0.0F, -0.5F * std::sin(a)); // counter-clockwise seen from above
+    };
+    const glm::vec3 up{0.0F, 0.5F, 0.0F};
+    for (int i = 0; i < kCylinderSegments; ++i) {
+        const auto a = rim(i);
+        const auto b = rim(i + 1);
+        const auto na = glm::normalize(a);
+        const auto nb = glm::normalize(b);
+        // The side: two triangles, wound counter-clockwise seen from outside.
+        add(a - up, na);
+        add(b - up, nb);
+        add(b + up, nb);
+        add(a - up, na);
+        add(b + up, nb);
+        add(a + up, na);
+        // The lids.
+        add(up, {0, 1, 0});
+        add(a + up, {0, 1, 0});
+        add(b + up, {0, 1, 0});
+        add(-up, {0, -1, 0});
+        add(b - up, {0, -1, 0});
+        add(a - up, {0, -1, 0});
+    }
+    return data;
+}
+
+GLuint makeArray(GLuint& buffer, const float* data, std::size_t bytes) {
+    GLuint array = 0;
+    glGenVertexArrays(1, &array);
+    glGenBuffers(1, &buffer);
+    glBindVertexArray(array);
+    glBindBuffer(GL_ARRAY_BUFFER, buffer);
+    glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(bytes), data, GL_STATIC_DRAW);
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), nullptr);
     glEnableVertexAttribArray(0);
     glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, 6 * sizeof(float), reinterpret_cast<void*>(3 * sizeof(float)));
     glEnableVertexAttribArray(1);
+    return array;
+}
+
+} // namespace
+
+Renderer::Renderer() : boxShader_(kBoxVertex, kBoxFragment), floorShader_(kFloorVertex, kFloorFragment) {
+    const auto cube = cubeVertices();
+    cubeArray_ = makeArray(cubeBuffer_, cube.data(), sizeof cube);
+    const auto cylinder = cylinderVertices();
+    cylinderVertices_ = static_cast<GLsizei>(cylinder.size() / 6);
+    cylinderArray_ = makeArray(cylinderBuffer_, cylinder.data(), cylinder.size() * sizeof(float));
 
     constexpr float h = 60.0F; // the floor reaches 60 m in every direction
     const float floor[] = {-h, 0, -h, h, 0, h, h, 0, -h, -h, 0, -h, -h, 0, h, h, 0, h};
@@ -158,6 +211,8 @@ Renderer::Renderer() : boxShader_(kBoxVertex, kBoxFragment), floorShader_(kFloor
 Renderer::~Renderer() {
     glDeleteBuffers(1, &cubeBuffer_);
     glDeleteVertexArrays(1, &cubeArray_);
+    glDeleteBuffers(1, &cylinderBuffer_);
+    glDeleteVertexArrays(1, &cylinderArray_);
     glDeleteBuffers(1, &floorBuffer_);
     glDeleteVertexArrays(1, &floorArray_);
 }
@@ -196,7 +251,14 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
         boxShader_.set("uAlpha", box.alpha);
         boxShader_.set("uUnlit", box.unlit ? 1.0F : 0.0F);
         boxShader_.set("uHighlight", box.highlight ? 1.0F : 0.0F);
-        glDrawArrays(GL_TRIANGLES, 0, 36);
+        boxShader_.set("uRound", box.round ? 1.0F : 0.0F);
+        if (box.round) {
+            glBindVertexArray(cylinderArray_);
+            glDrawArrays(GL_TRIANGLES, 0, cylinderVertices_);
+            glBindVertexArray(cubeArray_);
+        } else {
+            glDrawArrays(GL_TRIANGLES, 0, 36);
+        }
     };
     for (const auto& box : boxes) {
         if (box.alpha >= 1.0F) {

@@ -35,8 +35,12 @@ public:
     }
 };
 
+// Rounded, not truncated (duration_cast): 8.19 s as a double is
+// 8.1899999999999995, which cut down to whole nanoseconds is 1 ns short. A
+// 150 ms timer started at 8.04 s then sees 149.999999 ms at 8.19 s, and
+// ends a scan late.
 softplc::TimePoint simulatedTime(double seconds) {
-    return softplc::TimePoint{} + std::chrono::duration_cast<softplc::Duration>(std::chrono::duration<double>(seconds));
+    return softplc::TimePoint{} + std::chrono::round<softplc::Duration>(std::chrono::duration<double>(seconds));
 }
 
 } // namespace

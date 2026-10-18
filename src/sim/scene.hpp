@@ -38,8 +38,9 @@ struct PlacedConveyor {
 
 // What drives the actuators and motors: nothing (they're moved by hand and
 // conveyors always run), the built-in sorting program, soft_plc running an
-// ST program in lockstep with the simulation, or a live PLC over S7.
-enum class Control { Manual, BuiltInSorting, SoftPlc, S7Plc };
+// ST program in lockstep with the simulation, a live PLC over S7, or the
+// built-in camera triggering.
+enum class Control { Manual, BuiltInSorting, SoftPlc, S7Plc, BuiltInCameras };
 
 struct Scene {
     std::vector<PlacedConveyor> conveyors;
@@ -49,10 +50,12 @@ struct Scene {
     std::vector<DiverterSpec> diverters;
     std::vector<StopperSpec> stoppers;
     std::vector<BinSpec> bins;
+    std::vector<CameraSpec> cameras;
     // The control panel, and the control program.
     std::vector<ButtonSpec> buttons;
     std::vector<LampSpec> lamps;
     std::vector<SorterSpec> sorters;
+    std::vector<CameraTriggerSpec> cameraTriggers;
     Control control = Control::Manual;
     // soft_plc: the ST file it runs (relative to the scene file's folder, or
     // absolute), and a port for monitoring connections (0: none), so
@@ -86,6 +89,12 @@ bool sameLayout(const Scene& a, const Scene& b);
 // of which about a third are bad, an inspection sensor, a pusher and its
 // bin, and the built-in sorter wired to them.
 Scene sortingDemo();
+
+// The tin line from the reference scenario: tins at 1 m/s with uneven
+// gaps, one photocell, three cameras around the tin right after it and a
+// fourth further down, which the PLC triggers 150 ms later with a timer.
+// The fourth misses tins that come too close; the other three don't.
+Scene tinDemo();
 
 // The control program the scene asks for: null for manual control, the
 // built-in sorting, or null for the PLC kinds (the PLC link, in factory_sim_plc,
@@ -150,6 +159,16 @@ void removePusher(Scene& scene, std::size_t index);
 void removeDiverter(Scene& scene, std::size_t index);
 void removeStopper(Scene& scene, std::size_t index);
 void removeBin(Scene& scene, std::size_t index);
+
+// A camera over `conveyor`, a little past its middle, named K1, K2, ...,
+// with the next free trigger output and ready input. Returns its index.
+std::size_t addCamera(Scene& scene, std::size_t conveyor);
+void removeCamera(Scene& scene, std::size_t index);
+
+// A trigger for a camera from a photocell on the same conveyor, with the
+// delay that puts an item in the middle of the picture at the belt's set
+// speed (see the comment in scene.cpp).
+CameraTriggerSpec triggerFor(const Scene& scene, std::size_t photocell, std::size_t camera);
 
 // ---------------------------------------------------------------- Files
 

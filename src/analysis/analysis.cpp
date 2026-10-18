@@ -22,6 +22,10 @@ std::vector<Trace> traces(const World& world) {
     std::for_each(world.pushers().begin(), world.pushers().end(), actuator);
     std::for_each(world.diverters().begin(), world.diverters().end(), actuator);
     std::for_each(world.stoppers().begin(), world.stoppers().end(), actuator);
+    for (const auto& camera : world.cameras()) {
+        result.push_back(Trace{camera.spec.name + " trigger", camera.spec.triggerOutput, &camera.trigger});
+        result.push_back(Trace{camera.spec.name + " busy", "", &camera.busy}); // its ready input is the inverse
+    }
     for (std::size_t i = 0; i < world.buttons().size(); ++i) {
         result.push_back(
             Trace{world.buttons()[i].name + " button", world.buttons()[i].address, &world.buttonSignal(i)});

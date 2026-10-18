@@ -19,7 +19,8 @@ struct Trace {
 };
 
 // Every digital signal of the world, in a fixed order: conveyors' motors,
-// photocells, actuators (valve, extended, retracted), buttons, lamps.
+// photocells, actuators (valve, extended, retracted), cameras (trigger,
+// busy), buttons, lamps.
 // The pointers are valid as long as the world isn't rebuilt or changed.
 std::vector<Trace> traces(const World& world);
 
