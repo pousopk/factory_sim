@@ -132,6 +132,7 @@ add_library(factory_sim_view STATIC
   src/edit/scene_history.cpp
   src/edit/settings.cpp
   src/edit/file_browser.cpp
+  src/edit/placing.cpp
   src/analysis/analysis.cpp
   src/analysis/tin_study.cpp
 )
@@ -174,6 +175,7 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/drives.cpp
     src/app/sensors.cpp
     src/app/equipment.cpp
+    src/app/editing.cpp
     src/render/shader.cpp
     src/render/renderer.cpp
   )

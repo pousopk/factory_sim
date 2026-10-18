@@ -97,7 +97,7 @@ void App::frame(double realSeconds, int width, int height) {
     drawNewConfirmation();
 
     // An edit is finished when no widget is being used: then it's one undo step, saved at once.
-    if (!ImGui::IsAnyItemActive() && history_.commit()) {
+    if (!ImGui::IsAnyItemActive() && !drag_ && history_.commit()) {
         if (auto saved = saveScene(scene(), savePath()); saved) {
             fileStatus_ = scenePath_.empty() ? "untitled (saved in the config folder)"
                                              : "saved " + scenePath_.filename().string();
@@ -106,7 +106,9 @@ void App::frame(double realSeconds, int width, int height) {
         }
     }
     keepSelectionValid();
-    followScene();
+    if (!drag_) {
+        followScene(); // (while dragging, a preview is drawn instead)
+    }
 
     // Long pauses (the window was dragged, the computer was busy) shouldn't
     // turn into a burst of simulation: at most a quarter of a second at once.
@@ -127,7 +129,7 @@ void App::frame(double realSeconds, int width, int height) {
     }
     behind_ = !paused_ && stepsLastFrame_ == maxSteps;
     finishFiring();
-    renderer_.draw(sceneBoxes(*world_, 1.0, selected_), camera_, width, height);
+    renderer_.draw(boxesToDraw(), camera_, width, height);
     if (showNames_) {
         drawNames(width, height);
     }
@@ -140,7 +142,7 @@ void App::drawNames(int width, int height) {
     const float aspect = height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
     const auto viewProjection = camera_.projection(aspect) * camera_.view();
     auto* draw = ImGui::GetBackgroundDrawList();
-    for (const auto& label : sceneLabels(*world_)) {
+    for (const auto& label : sceneLabels(drag_ && preview_ ? *preview_ : *world_)) {
         const glm::vec4 clip = viewProjection * glm::vec4(label.position, 1.0F);
         if (clip.w <= 0.01F) {
             continue; // behind the camera
@@ -189,10 +191,21 @@ void App::restartRun() {
 void App::handleMouse(int width, int height) {
     const auto& io = ImGui::GetIO();
     if (io.WantCaptureMouse) {
+        hovered_.reset();
         return;
     }
+    const bool clicked =
+        ImGui::IsMouseReleased(ImGuiMouseButton_Left) && io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Left] < 9.0F;
+    if (const auto ray = mouseRay(width, height)) {
+        editInView(*ray, ImGui::IsMouseClicked(ImGuiMouseButton_Left), ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                   clicked);
+        // A click (a press and release that didn't move far) selects what's under the mouse.
+        if (clicked && !placing_ && !drag_) {
+            selected_ = pickAt(sceneBoxes(*world_), ray->origin, ray->direction);
+        }
+    }
     const auto windowHeight = static_cast<float>(height);
-    if (ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0F)) {
+    if (!drag_ && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0F)) {
         camera_.rotate(io.MouseDelta.x, io.MouseDelta.y, windowHeight);
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0F) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0F)) {
@@ -200,15 +213,6 @@ void App::handleMouse(int width, int height) {
     }
     if (io.MouseWheel != 0.0F) {
         camera_.zoom(io.MouseWheel);
-    }
-    // A click is a press and release that didn't move far (otherwise it was a drag).
-    if (ImGui::IsMouseReleased(ImGuiMouseButton_Left) && io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Left] < 9.0F) {
-        // ImGui's mouse is in window points; the framebuffer may have more pixels (HiDPI).
-        const float scaleX = static_cast<float>(width) / std::max(io.DisplaySize.x, 1.0F);
-        const float scaleY = static_cast<float>(height) / std::max(io.DisplaySize.y, 1.0F);
-        const auto ray = camera_.rayThrough(io.MousePos.x * scaleX, io.MousePos.y * scaleY, static_cast<float>(width),
-                                            static_cast<float>(height));
-        selected_ = pickAt(sceneBoxes(*world_), ray.origin, ray.direction);
     }
 }
 
@@ -227,7 +231,28 @@ void App::handleKeys() {
         deleteSelected();
     }
     if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
-        selected_.reset();
+        if (placing_) {
+            placing_.reset(); // Esc first cancels placing, then the selection
+            hovered_.reset();
+        } else {
+            selected_.reset();
+        }
+    }
+    if (io.WantCaptureKeyboard) {
+        return;
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_C)) {
+        copySelection();
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_V)) {
+        pasteClip(std::nullopt);
+    }
+    if (io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_D)) {
+        copySelection();
+        pasteClip(std::nullopt);
+    }
+    if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R)) {
+        turnSelection(io.KeyShift ? -1.0F : 1.0F);
     }
 }
 
@@ -322,40 +347,6 @@ void App::keepSelectionValid() {
     if (selected_->index >= count) {
         selected_.reset();
     }
-}
-
-std::optional<std::size_t> App::selectedConveyor() const {
-    if (!selected_) {
-        return std::nullopt;
-    }
-    const auto& s = history_.current();
-    switch (selected_->kind) {
-    case Pick::Kind::Conveyor:
-        return selected_->index;
-    case Pick::Kind::Photocell:
-        return s.photocells[selected_->index].conveyor;
-    case Pick::Kind::Spawner:
-        return s.spawners[selected_->index].conveyor;
-    case Pick::Kind::Pusher:
-        return s.pushers[selected_->index].conveyor;
-    case Pick::Kind::Diverter:
-        return s.diverters[selected_->index].conveyor;
-    case Pick::Kind::Stopper:
-        return s.stoppers[selected_->index].conveyor;
-    case Pick::Kind::Bin:
-        return s.bins[selected_->index].conveyor;
-    case Pick::Kind::Camera:
-        return s.cameras[selected_->index].conveyor;
-    case Pick::Kind::Proximity:
-        return s.proximities[selected_->index].conveyor;
-    case Pick::Kind::Laser:
-        return s.lasers[selected_->index].conveyor;
-    case Pick::Kind::LightCurtain:
-        return s.curtains[selected_->index].conveyor;
-    case Pick::Kind::None:
-        break;
-    }
-    return std::nullopt;
 }
 
 // ---------------------------------------------------------------- Panels
@@ -536,7 +527,6 @@ void App::drawLinePanel() {
     }
 
     ImGui::SeparatorText("Add");
-    const auto conveyor = selectedConveyor();
     const bool conveyorSelected = selected_ && selected_->kind == Pick::Kind::Conveyor;
     ImGui::BeginDisabled(!conveyorSelected);
     ImGui::TextUnformatted("After the selected conveyor:");
@@ -562,52 +552,31 @@ void App::drawLinePanel() {
     if (ImGui::SmallButton("New conveyor")) {
         selected_ = Pick{Pick::Kind::Conveyor, addConveyor(s)};
     }
-    ImGui::SameLine();
-    ImGui::BeginDisabled(!conveyor);
-    if (ImGui::SmallButton("Photocell")) {
-        selected_ = Pick{Pick::Kind::Photocell, addPhotocell(s, *conveyor)};
+    // Devices: the button picks what, a click on a belt says where.
+    ImGui::TextUnformatted("Then click on a belt to place:");
+    const struct {
+        const char* label;
+        Pick::Kind kind;
+    } devices[] = {{"Photocell", Pick::Kind::Photocell}, {"Spawner", Pick::Kind::Spawner},
+                   {"Pusher", Pick::Kind::Pusher},       {"Diverter", Pick::Kind::Diverter},
+                   {"Stopper", Pick::Kind::Stopper},     {"Bin", Pick::Kind::Bin},
+                   {"Camera", Pick::Kind::Camera},       {"Proximity", Pick::Kind::Proximity},
+                   {"Laser", Pick::Kind::Laser},         {"Light curtain", Pick::Kind::LightCurtain}};
+    for (std::size_t i = 0; i < std::size(devices); ++i) {
+        if (i % 4 != 0) {
+            ImGui::SameLine();
+        }
+        const bool armed = placing_ == devices[i].kind;
+        if (armed) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.25F, 0.55F, 0.95F, 1.0F));
+        }
+        if (ImGui::SmallButton(devices[i].label)) {
+            placing_ = armed ? std::nullopt : std::optional<Pick::Kind>(devices[i].kind);
+        }
+        if (armed) {
+            ImGui::PopStyleColor();
+        }
     }
-    ImGui::SetItemTooltip("Halfway along the selected conveyor");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Spawner")) {
-        selected_ = Pick{Pick::Kind::Spawner, addSpawner(s, *conveyor)};
-    }
-    ImGui::SetItemTooltip("At the start of the selected conveyor");
-    if (ImGui::SmallButton("Pusher")) {
-        selected_ = Pick{Pick::Kind::Pusher, addPusher(s, *conveyor)};
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Diverter")) {
-        selected_ = Pick{Pick::Kind::Diverter, addDiverter(s, *conveyor)};
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Stopper")) {
-        selected_ = Pick{Pick::Kind::Stopper, addStopper(s, *conveyor)};
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Bin")) {
-        selected_ = Pick{Pick::Kind::Bin, addBin(s, *conveyor)};
-    }
-    ImGui::SetItemTooltip("Beside the selected conveyor, across from its pusher if it has one");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Camera")) {
-        selected_ = Pick{Pick::Kind::Camera, addCamera(s, *conveyor)};
-    }
-    ImGui::SetItemTooltip("Over the selected conveyor, looking down");
-    if (ImGui::SmallButton("Proximity")) {
-        selected_ = Pick{Pick::Kind::Proximity, addProximity(s, *conveyor)};
-    }
-    ImGui::SetItemTooltip("An inductive proximity switch on the left of the selected conveyor");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Laser")) {
-        selected_ = Pick{Pick::Kind::Laser, addLaser(s, *conveyor)};
-    }
-    ImGui::SetItemTooltip("A laser distance sensor over the selected conveyor, looking down");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Light curtain")) {
-        selected_ = Pick{Pick::Kind::LightCurtain, addLightCurtain(s, *conveyor)};
-    }
-    ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!selected_);
     if (ImGui::SmallButton("Delete")) {

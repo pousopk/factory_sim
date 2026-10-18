@@ -1,6 +1,7 @@
 #pragma once
 #include "analysis/tin_study.hpp"
 #include "edit/file_browser.hpp"
+#include "edit/placing.hpp"
 #include "edit/scene_history.hpp"
 #include "edit/settings.hpp"
 #include "render/orbit_camera.hpp"
@@ -62,6 +63,15 @@ private:
     std::filesystem::path sceneFolder() const;                  // what relative paths in the scene start from
 
     void handleMouse(int width, int height);
+    // Editing in the view (editing.cpp): dragging the selection, placing a new
+    // device by clicking on a belt, copy and paste, turning a conveyor.
+    void editInView(const OrbitCamera::Ray& ray, bool pressed, bool held, bool clicked);
+    void copySelection();
+    void pasteClip(std::optional<BeltHit> at);
+    void turnSelection(float quarterTurns);
+    bool canDrag(Pick pick) const; // a device on a belt, or a conveyor standing on its own
+    std::vector<DrawBox> boxesToDraw();
+    std::optional<OrbitCamera::Ray> mouseRay(int width, int height) const;
     void drawNames(int width, int height); // the devices' names, over the 3D view
     void handleKeys();
     void drawMainPanel();
@@ -110,9 +120,6 @@ private:
     void restartRun();  // a new world from the scene: no boxes, time 0
     void deleteSelected();
     void keepSelectionValid();
-    // The conveyor something new should go on: the selected one, or the one
-    // the selected sensor or spawner is on.
-    std::optional<std::size_t> selectedConveyor() const;
 
     Scene& scene() { return history_.current(); }
 
@@ -174,9 +181,26 @@ private:
     float timeScale_ = 1.0F;
     double frameSeconds_ = 0.0; // the last frame's real duration, for the panel
     int stepsLastFrame_ = 0;
-    double stepMilliseconds_ = 0.1;  // what a simulation step has cost lately (real time)
-    bool behind_ = false;            // the last frame ran out of time for the simulation
-    bool showNames_ = true;          // device names over the view (View menu)
+    double stepMilliseconds_ = 0.1; // what a simulation step has cost lately (real time)
+    bool behind_ = false;           // the last frame ran out of time for the simulation
+    bool showNames_ = true;         // device names over the view (View menu)
+
+    // Editing in the view. A drag holds what's dragged and where it was
+    // grabbed; meanwhile the scene changes but the world doesn't follow (a
+    // moved conveyor needs a new world): a preview of the layout is drawn
+    // instead, and letting go makes it one undo step.
+    struct Drag {
+        Pick what;
+        float grab = 0.0F;     // a device: the mouse's place along its belt, less the device's
+        glm::vec3 grabPoint{}; // a conveyor: where the mouse met the belt's level
+        glm::vec3 startedAt{}; // and where the conveyor started then
+    };
+    std::optional<Drag> drag_;
+    std::unique_ptr<World> preview_;    // the layout being dragged, to draw
+    Scene previewed_;                   // the scene it was built from
+    std::optional<Pick::Kind> placing_; // a new device waiting for a click on a belt
+    std::optional<Pick> hovered_;       // the belt under the mouse while placing
+    std::optional<Clip> clipboard_;
     float scanMilliseconds_ = 10.0F; // a PLC reading the photocell this often (for the trigger table)
     int newSorterSensor_ = 0;        // the sensor and pusher chosen for the next sorter
     int newSorterPusher_ = 0;

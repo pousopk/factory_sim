@@ -17,6 +17,7 @@ add_executable(factory_sim_tests
   render/orbit_camera_test.cpp
   edit/scene_history_test.cpp
   edit/files_test.cpp
+  edit/placing_test.cpp
   analysis/analysis_test.cpp
   analysis/tin_study_test.cpp
 )

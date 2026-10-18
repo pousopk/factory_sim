@@ -193,6 +193,24 @@ void App::drawMenuBar() {
         if (ImGui::MenuItem("Redo", "Ctrl+Y", false, history_.canRedo())) {
             history_.redo();
         }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Copy", "Ctrl+C", false, selected_.has_value())) {
+            copySelection();
+        }
+        if (ImGui::MenuItem("Paste", "Ctrl+V", false, clipboard_.has_value())) {
+            pasteClip(std::nullopt);
+        }
+        if (ImGui::MenuItem("Duplicate", "Ctrl+D", false, selected_.has_value())) {
+            copySelection();
+            pasteClip(std::nullopt);
+        }
+        if (ImGui::MenuItem("Turn conveyor", "R / Shift+R", false,
+                            selected_ && selected_->kind == Pick::Kind::Conveyor && canDrag(*selected_))) {
+            turnSelection(1.0F);
+        }
+        ImGui::Separator();
+        ImGui::TextDisabled("Drag the selection in the view: a device along its belt,");
+        ImGui::TextDisabled("a conveyor across the floor. Shift: fine steps.");
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("View")) {
