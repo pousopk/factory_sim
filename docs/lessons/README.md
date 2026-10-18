@@ -16,3 +16,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 8. Cameras and the tin line | [08-cameras.md](08-cameras.md) |
 | 9. Files | [09-files.md](09-files.md) |
 | 10. Analog I/O and drives | [10-drives.md](10-drives.md) |
+| 11. More sensors | [11-sensors.md](11-sensors.md) |

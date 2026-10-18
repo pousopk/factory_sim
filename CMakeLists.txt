@@ -92,6 +92,7 @@ add_library(factory_sim_core STATIC
   src/sim/sensors.cpp
   src/sim/camera.cpp
   src/sim/drive.cpp
+  src/sim/field_sensors.cpp
   src/sim/scene.cpp
   src/sim/actuators.cpp
   src/sim/io.cpp
@@ -165,6 +166,7 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/widgets.cpp
     src/app/files.cpp
     src/app/drives.cpp
+    src/app/sensors.cpp
     src/render/shader.cpp
     src/render/renderer.cpp
   )

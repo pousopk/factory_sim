@@ -402,6 +402,7 @@ void World::step() {
     ++stepCount_;
     updatePhotocells(stepStart, time()); // the world now is as it is at the end of the step
     updateCameras(time());
+    updateFieldSensors(stepStart, time());
     updateBins();
 }
 
@@ -479,6 +480,16 @@ void World::scan(double time) {
     }
     for (std::size_t i = 0; i < potentiometers_.size(); ++i) {
         write(potentiometers_[i].address, static_cast<std::uint32_t>(turned_[i]));
+    }
+    for (const auto& proximity : proximities_) {
+        write(proximity.spec.input, proximity.detector.output.value() ? 1U : 0U);
+    }
+    for (const auto& laser : lasers_) {
+        write(laser.spec.output, laser.value);
+    }
+    for (const auto& curtain : curtains_) {
+        write(curtain.spec.clearInput, curtain.clear.value() ? 1U : 0U);
+        write(curtain.spec.countInput, static_cast<std::uint32_t>(curtain.blocked));
     }
     for (std::size_t i = 0; i < buttons_.size(); ++i) {
         // A normally closed contact is closed (TRUE) while the button is NOT pressed.
@@ -583,6 +594,175 @@ void World::recordSetpoint(Conveyor& conveyor, double time) {
     conveyor.setpointSamples.emplace_back(time, setpoint);
     if (conveyor.setpointSamples.size() > Conveyor::kSpeedSamples) {
         conveyor.setpointSamples.pop_front();
+    }
+}
+
+// ---------------------------------------------------------------- Field sensors
+
+void World::setFieldSensors(const std::vector<ProximitySpec>& proximities, const std::vector<LaserSpec>& lasers,
+                            const std::vector<LightCurtainSpec>& curtains) {
+    // Each list follows the specs; one that moves to another conveyor starts afresh.
+    const auto follow = [](auto& running, const auto& specs) {
+        running.resize(specs.size());
+        for (std::size_t i = 0; i < specs.size(); ++i) {
+            if (running[i].spec.conveyor != specs[i].conveyor) {
+                running[i] = {};
+            }
+            running[i].spec = specs[i];
+        }
+    };
+    follow(proximities_, proximities);
+    follow(lasers_, lasers);
+    follow(curtains_, curtains);
+}
+
+// Proximity switches, laser sensors and light curtains look at the items as
+// they are at the end of the step, as photocells do.
+void World::updateFieldSensors(double stepStart, double stepEnd) {
+    if (proximities_.empty() && lasers_.empty() && curtains_.empty()) {
+        return;
+    }
+    const auto& bodies = physics_.bodies();
+    // Each item once: where it is, how it's turned, its half size, its shape.
+    struct Seen {
+        glm::vec3 center;
+        glm::mat3 rotation;
+        glm::vec3 half;
+        Shape shape;
+    };
+    std::vector<Seen> seen;
+    seen.reserve(items_.size());
+    for (const auto& item : items_) {
+        seen.push_back(Seen{toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))),
+                            glm::mat3_cast(toGlm(bodies.GetRotation(item.body))), item.size / 2.0F, item.shape});
+    }
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+
+    for (auto& proximity : proximities_) {
+        const auto& spec = proximity.spec;
+        if (spec.conveyor >= conveyors_.size()) {
+            continue;
+        }
+        const auto& conveyor = conveyors_[spec.conveyor];
+        const auto origin = conveyor.beltPoint(0.0F);
+        const auto along = conveyor.direction();
+        const auto left = leftOf(along);
+        const float faceSide = conveyor.spec.width / 2.0F - spec.inset; // beside: the face, from the centre line
+        // The switching is a photocell's, whose "beam" is the face.
+        auto& detector = proximity.detector;
+        detector.spec.along = spec.along;
+        detector.spec.beamDiameter = spec.faceDiameter;
+        detector.spec.onFraction = 0.5F;
+        detector.spec.offFraction = 0.3F;
+        detector.spec.responseTime = spec.responseTime;
+        std::vector<std::pair<float, float>> intervals;
+        float nearest = -1.0F;
+        for (const auto& item : seen) {
+            const auto offset = item.center - origin;
+            const float lateral = glm::dot(offset, left);
+            const float height = item.center.y - conveyor.spec.beltHeight;
+            const float reachUp = reach(item.shape, item.rotation, item.half, up);
+            const float reachSide = reach(item.shape, item.rotation, item.half, left);
+            float distance = 0.0F;
+            bool facing = false; // the item is in line with the face
+            switch (spec.mount) {
+            case Mount::Above:
+                distance = spec.height - (height + reachUp);
+                facing = std::abs(lateral) <= reachSide;
+                break;
+            case Mount::Left:
+                distance = faceSide - (lateral + reachSide);
+                facing = std::abs(height - spec.height) <= reachUp;
+                break;
+            case Mount::Right:
+                distance = (lateral - reachSide) + faceSide;
+                facing = std::abs(height - spec.height) <= reachUp;
+                break;
+            }
+            // Seen within sn for its material; once on, 10 % further (the
+            // hysteresis datasheets give).
+            const float range = spec.range * rangeFactor(spec, item.shape) * (detector.beam ? 1.1F : 1.0F);
+            if (!facing || distance < -0.01F || distance > range) {
+                continue;
+            }
+            const float a = glm::dot(offset, along);
+            const float extent = reach(item.shape, item.rotation, item.half, along);
+            intervals.emplace_back(a - extent, a + extent);
+            nearest = nearest < 0.0F ? distance : std::min(nearest, distance);
+        }
+        proximity.distance = nearest;
+        detector.sense(beamCoverage(spec.along, spec.faceDiameter, intervals), stepStart, kStep);
+        while (detector.nextOutput(stepEnd)) {
+        }
+    }
+
+    for (auto& laser : lasers_) {
+        const auto& spec = laser.spec;
+        if (spec.conveyor >= conveyors_.size()) {
+            continue;
+        }
+        const auto& conveyor = conveyors_[spec.conveyor];
+        // The spot on the belt; the highest surface over it is what the laser sees.
+        const auto spot = conveyor.beltPoint(spec.along) + leftOf(conveyor.direction()) * spec.across;
+        float top = 0.0F; // above the belt
+        for (const auto& item : seen) {
+            const auto local = glm::transpose(item.rotation) * (spot - item.center); // in the item's own axes
+            const bool under = item.shape == Shape::Tin
+                                   ? local.x * local.x + local.z * local.z <= item.half.x * item.half.x
+                                   : std::abs(local.x) <= item.half.x && std::abs(local.z) <= item.half.z;
+            if (under) {
+                top = std::max(top, item.center.y - conveyor.spec.beltHeight +
+                                        reach(item.shape, item.rotation, item.half, up));
+            }
+        }
+        laser.trueDistance = spec.mountHeight - top;
+        if (stepEnd + 1e-9 < laser.nextMeasurement) {
+            continue; // between measurements: the output holds the last one
+        }
+        laser.nextMeasurement = stepEnd + spec.measureTime;
+        float measured = laser.trueDistance;
+        if (spec.noise > 0.0F) {
+            std::normal_distribution<float> noise(0.0F, spec.noise);
+            measured += noise(laser.random);
+        }
+        if (spec.resolution > 0.0F) {
+            measured = std::round(measured / spec.resolution) * spec.resolution;
+        }
+        const bool inRange = measured >= spec.rangeMin && measured <= spec.rangeMax;
+        laser.distance = inRange ? measured : -1.0F;
+        laser.value = laserValue(spec, laser.distance);
+        laser.samples.emplace_back(stepEnd, laser.distance);
+        if (laser.samples.size() > Laser::kSamples) {
+            laser.samples.pop_front();
+        }
+    }
+
+    for (auto& curtain : curtains_) {
+        const auto& spec = curtain.spec;
+        if (spec.conveyor >= conveyors_.size() || stepEnd + 1e-9 < curtain.nextScan) {
+            continue; // between scans: the outputs hold
+        }
+        curtain.nextScan = stepEnd + spec.scanTime;
+        const auto& conveyor = conveyors_[spec.conveyor];
+        const auto origin = conveyor.beltPoint(0.0F);
+        const auto along = conveyor.direction();
+        curtain.broken.assign(static_cast<std::size_t>(std::max(spec.beams, 0)), false);
+        for (const auto& item : seen) {
+            const float a = glm::dot(item.center - origin, along);
+            if (std::abs(a - spec.along) > reach(item.shape, item.rotation, item.half, along)) {
+                continue; // not in the curtain's plane
+            }
+            const float height = item.center.y - conveyor.spec.beltHeight;
+            const float reachUp = reach(item.shape, item.rotation, item.half, up);
+            for (std::size_t b = 0; b < curtain.broken.size(); ++b) {
+                const float beam = spec.lowest + static_cast<float>(b) * spec.pitch;
+                if (beam >= height - reachUp && beam <= height + reachUp) {
+                    curtain.broken[b] = true;
+                }
+            }
+        }
+        curtain.blocked = static_cast<int>(std::count(curtain.broken.begin(), curtain.broken.end(), true));
+        curtain.clear.set(stepEnd, curtain.blocked == 0);
     }
 }
 
@@ -785,7 +965,13 @@ void World::updateSpawners() {
         // same ones are bad every run.
         std::uniform_real_distribution<float> chance(0.0F, 1.0F);
         const bool nok = spec.nokFraction > 0.0F && chance(random_) < spec.nokFraction;
-        spawnItem(position, spec.size,
+        auto size = spec.size;
+        if (spec.heightJitter > 0.0F) {
+            std::uniform_real_distribution<float> height(-spec.heightJitter, spec.heightJitter);
+            size.y = std::max(0.01F, size.y + height(random_));
+        }
+        const auto at = position + glm::vec3(0.0F, (size.y - spec.size.y) / 2.0F, 0.0F); // still resting on the belt
+        spawnItem(at, size,
                   nok                        ? kNokColor
                   : spec.shape == Shape::Tin ? kTinColor
                                              : boxColor(nextItemId_),

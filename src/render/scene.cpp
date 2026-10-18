@@ -238,6 +238,117 @@ std::vector<DrawBox> cameraBoxes(const Camera& camera, const Conveyor& conveyor,
     return boxes;
 }
 
+std::vector<DrawBox> proximityBoxes(const Proximity& proximity, const Conveyor& conveyor) {
+    const auto& spec = proximity.spec;
+    const auto along = conveyor.direction();
+    const auto left = leftOf(along);
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    const auto heading = glm::angleAxis(conveyor.spec.heading, up);
+    // The face, and the direction the barrel points from it (away from the belt).
+    glm::vec3 face;
+    glm::vec3 back;
+    switch (spec.mount) {
+    case Mount::Above:
+        face = conveyor.beltPoint(spec.along) + up * spec.height;
+        back = up;
+        break;
+    case Mount::Left:
+        face = conveyor.beltPoint(spec.along) + left * (conveyor.spec.width / 2.0F - spec.inset) + up * spec.height;
+        back = left;
+        break;
+    case Mount::Right:
+        face = conveyor.beltPoint(spec.along) - left * (conveyor.spec.width / 2.0F - spec.inset) + up * spec.height;
+        back = -left;
+        break;
+    }
+    // A cylinder's own axis is y: turn it onto `back`.
+    const auto axis = spec.mount == Mount::Above ? heading : heading * glm::angleAxis(1.5708F, glm::vec3(1, 0, 0));
+    constexpr float length = 0.07F;
+    std::vector<DrawBox> boxes;
+    DrawBox barrel{face + back * (length / 2.0F), axis, glm::vec3(spec.faceDiameter, length, spec.faceDiameter),
+                   spec.inductive ? glm::vec3(0.72F, 0.74F, 0.78F) : glm::vec3(0.30F, 0.32F, 0.36F)};
+    barrel.round = true;
+    boxes.push_back(barrel);
+    DrawBox light{face + back * (length + 0.003F),
+                  axis,
+                  glm::vec3(0.008F, 0.006F, 0.008F),
+                  proximity.detector.output.value() ? kLedOn : kLedOff,
+                  0.0F,
+                  0.0F,
+                  1.0F,
+                  true};
+    light.round = true;
+    boxes.push_back(light);
+    // Its reach for metal, as a faint disc.
+    DrawBox zone{face - back * (spec.range / 2.0F),
+                 axis,
+                 glm::vec3(spec.faceDiameter, spec.range, spec.faceDiameter),
+                 {0.4F, 0.8F, 1.0F},
+                 0.0F,
+                 0.0F,
+                 0.18F,
+                 true};
+    zone.round = true;
+    boxes.push_back(zone);
+    return boxes;
+}
+
+std::vector<DrawBox> laserBoxes(const Laser& laser, const Conveyor& conveyor) {
+    const auto& spec = laser.spec;
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    const auto heading = glm::angleAxis(conveyor.spec.heading, up);
+    const auto left = leftOf(conveyor.direction());
+    const auto spot = conveyor.beltPoint(spec.along) + left * spec.across;
+    const auto body = spot + up * (spec.mountHeight + 0.04F);
+    std::vector<DrawBox> boxes;
+    boxes.push_back(DrawBox{body, heading, glm::vec3(0.06F, 0.08F, 0.05F), {0.85F, 0.65F, 0.15F}});
+    // A post beside the belt and an arm over it.
+    const auto foot = conveyor.beltPoint(spec.along) + left * (conveyor.spec.width / 2.0F + 0.12F);
+    const float top = body.y + 0.05F;
+    boxes.push_back(DrawBox{glm::vec3(foot.x, top / 2.0F, foot.z), heading, glm::vec3(0.03F, top, 0.03F), kPostColor});
+    const auto armStart = glm::vec3(foot.x, top, foot.z);
+    const auto armEnd = glm::vec3(body.x, top, body.z);
+    boxes.push_back(DrawBox{(armStart + armEnd) / 2.0F, heading,
+                            glm::vec3(0.025F, 0.025F, glm::length(armEnd - armStart) + 0.03F), kPostColor});
+    // The beam, down to what it sees (the true surface), and the spot there.
+    if (laser.trueDistance > 0.0F) {
+        const auto hit = spot + up * (spec.mountHeight - laser.trueDistance);
+        boxes.push_back(DrawBox{(hit + body) / 2.0F, heading, glm::vec3(0.002F, glm::length(body - hit), 0.002F),
+                                kBeamColor, 0.0F, 0.0F, 0.5F, true});
+        boxes.push_back(
+            DrawBox{hit + up * 0.001F, heading, glm::vec3(0.006F, 0.002F, 0.006F), kBeamColor, 0.0F, 0.0F, 1.0F, true});
+    }
+    return boxes;
+}
+
+std::vector<DrawBox> curtainBoxes(const LightCurtain& curtain, const Conveyor& conveyor) {
+    const auto& spec = curtain.spec;
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    const auto heading = glm::angleAxis(conveyor.spec.heading, up);
+    const auto left = leftOf(conveyor.direction());
+    const auto base = conveyor.beltPoint(spec.along);
+    const float halfSpan = conveyor.spec.width / 2.0F + kFrameWidth + 0.02F;
+    const float height = spec.lowest + static_cast<float>(std::max(spec.beams - 1, 0)) * spec.pitch + 0.03F;
+    std::vector<DrawBox> boxes;
+    for (const float sign : {-1.0F, 1.0F}) {
+        boxes.push_back(DrawBox{base + left * sign * halfSpan + up * (height / 2.0F), heading,
+                                glm::vec3(0.03F, height, 0.03F), sign > 0.0F ? kHousingColor : glm::vec3(0.2F)});
+    }
+    boxes.push_back(DrawBox{base + left * halfSpan + up * (height + 0.006F), heading, glm::vec3(0.012F, 0.008F, 0.012F),
+                            curtain.clear.value() ? kLedOn : kLedOff, 0.0F, 0.0F, 1.0F, true});
+    for (int b = 0; b < spec.beams; ++b) {
+        const bool broken =
+            static_cast<std::size_t>(b) < curtain.broken.size() && curtain.broken[static_cast<std::size_t>(b)];
+        if (broken) {
+            continue; // the light doesn't get through
+        }
+        boxes.push_back(DrawBox{base + up * (spec.lowest + static_cast<float>(b) * spec.pitch), heading,
+                                glm::vec3(0.002F, 0.002F, 2.0F * halfSpan - 0.03F), kBeamColor, 0.0F, 0.0F, 0.4F,
+                                true});
+    }
+    return boxes;
+}
+
 std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& conveyor) {
     const auto rotation = glm::angleAxis(conveyor.spec.heading, glm::vec3(0.0F, 1.0F, 0.0F));
     const auto along = conveyor.direction();
@@ -305,6 +416,24 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
         if (onConveyor(camera.spec.conveyor)) {
             addParts(boxes, cameraBoxes(camera, conveyors[camera.spec.conveyor], world.time()),
                      Pick{Pick::Kind::Camera, i}, selected);
+        }
+    }
+    for (std::size_t i = 0; i < world.proximities().size(); ++i) {
+        const auto& p = world.proximities()[i];
+        if (onConveyor(p.spec.conveyor)) {
+            addParts(boxes, proximityBoxes(p, conveyors[p.spec.conveyor]), Pick{Pick::Kind::Proximity, i}, selected);
+        }
+    }
+    for (std::size_t i = 0; i < world.lasers().size(); ++i) {
+        const auto& l = world.lasers()[i];
+        if (onConveyor(l.spec.conveyor)) {
+            addParts(boxes, laserBoxes(l, conveyors[l.spec.conveyor]), Pick{Pick::Kind::Laser, i}, selected);
+        }
+    }
+    for (std::size_t i = 0; i < world.curtains().size(); ++i) {
+        const auto& c = world.curtains()[i];
+        if (onConveyor(c.spec.conveyor)) {
+            addParts(boxes, curtainBoxes(c, conveyors[c.spec.conveyor]), Pick{Pick::Kind::LightCurtain, i}, selected);
         }
     }
     for (const auto& item : world.items()) {

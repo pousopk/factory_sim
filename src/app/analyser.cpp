@@ -100,6 +100,9 @@ void App::drawTimelines() {
 
     const float available = ImGui::GetContentRegionAvail().y;
     const float speedHeight = std::max(90.0F, available * 0.28F);
+    // Lasers get a plot of their own, in millimetres, under the speeds.
+    const bool lasers = !world_->lasers().empty();
+    const float laserHeight = lasers ? speedHeight : 0.0F;
     const auto timeAxis = [&](bool labels) {
         ImPlot::SetupAxis(ImAxis_X1, labels ? "time (s)" : nullptr, labels ? 0 : ImPlotAxisFlags_NoTickLabels);
         ImPlot::SetupAxisLinks(ImAxis_X1, &viewFrom_, &viewTo_); // both plots show the same span
@@ -109,7 +112,7 @@ void App::drawTimelines() {
     };
 
     // The traces: trace k drawn between k and k + 0.7, the first one on top.
-    if (ImPlot::BeginPlot("##traces", ImVec2(-1, available - speedHeight),
+    if (ImPlot::BeginPlot("##traces", ImVec2(-1, available - speedHeight - laserHeight),
                           ImPlotFlags_NoLegend | ImPlotFlags_NoMenus)) {
         timeAxis(false);
         ImPlot::SetupAxis(ImAxis_Y1, nullptr, ImPlotAxisFlags_Lock | ImPlotAxisFlags_NoGridLines);
@@ -186,6 +189,26 @@ void App::drawTimelines() {
                                                    : ImPlotSpec(ImPlotProp_LineWeight, 2.0F);
             ImPlot::PlotLine(line.name.c_str(), line.xs.data(), line.ys.data(), static_cast<int>(line.xs.size()),
                              style);
+        }
+        ImPlot::EndPlot();
+    }
+
+    // What each laser measured, as it measured it (in steps of its
+    // resolution, with its noise); out of range is left out.
+    if (lasers && ImPlot::BeginPlot("##distances", ImVec2(-1, laserHeight - 4.0F), ImPlotFlags_NoMenus)) {
+        timeAxis(true);
+        ImPlot::SetupAxis(ImAxis_Y1, "mm", ImPlotAxisFlags_AutoFit);
+        for (const auto& laser : world_->lasers()) {
+            std::vector<double> xs;
+            std::vector<double> ys;
+            for (const auto& [time, distance] : laser.samples) {
+                if (time >= viewFrom_ - 0.01 && time <= viewTo_ + 0.01 && distance >= 0.0F) {
+                    xs.push_back(time);
+                    ys.push_back(distance * 1000.0);
+                }
+            }
+            ImPlot::PlotLine((laser.spec.name + " distance").c_str(), xs.data(), ys.data(),
+                             static_cast<int>(xs.size()));
         }
         ImPlot::EndPlot();
     }

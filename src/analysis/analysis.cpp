@@ -22,6 +22,13 @@ std::vector<Trace> traces(const World& world) {
     std::for_each(world.pushers().begin(), world.pushers().end(), actuator);
     std::for_each(world.diverters().begin(), world.diverters().end(), actuator);
     std::for_each(world.stoppers().begin(), world.stoppers().end(), actuator);
+    for (const auto& p : world.proximities()) {
+        result.push_back(
+            Trace{p.spec.name + (p.spec.inductive ? " inductive" : " capacitive"), p.spec.input, &p.detector.output});
+    }
+    for (const auto& c : world.curtains()) {
+        result.push_back(Trace{c.spec.name + " curtain clear", c.spec.clearInput, &c.clear});
+    }
     for (const auto& camera : world.cameras()) {
         result.push_back(Trace{camera.spec.name + " trigger", camera.spec.triggerOutput, &camera.trigger});
         result.push_back(Trace{camera.spec.name + " busy", "", &camera.busy}); // its ready input is the inverse

@@ -51,6 +51,9 @@ struct Scene {
     std::vector<StopperSpec> stoppers;
     std::vector<BinSpec> bins;
     std::vector<CameraSpec> cameras;
+    std::vector<ProximitySpec> proximities;
+    std::vector<LaserSpec> lasers;
+    std::vector<LightCurtainSpec> curtains;
     // The control panel, and the control program.
     std::vector<ButtonSpec> buttons;
     std::vector<LampSpec> lamps;
@@ -170,6 +173,20 @@ void fitDrive(Scene& scene, std::size_t conveyor);
 // and Acknowledge buttons, a speed potentiometer, and lamps for running and
 // fault. examples/drive.st is the program.
 Scene driveDemo(std::string program);
+
+// A line to try the sensors on: boxes of different heights and tins, an
+// inductive and a capacitive proximity switch beside the belt, a laser
+// measuring heights from above, and a light curtain.
+Scene sensorsDemo();
+
+// New sensors on `conveyor`, named and wired to the next free addresses.
+// Each returns its index.
+std::size_t addProximity(Scene& scene, std::size_t conveyor);
+std::size_t addLaser(Scene& scene, std::size_t conveyor);
+std::size_t addLightCurtain(Scene& scene, std::size_t conveyor);
+void removeProximity(Scene& scene, std::size_t index);
+void removeLaser(Scene& scene, std::size_t index);
+void removeLightCurtain(Scene& scene, std::size_t index);
 
 // A camera over `conveyor`, a little past its middle, named K1, K2, ...,
 // with the next free trigger output and ready input. Returns its index.

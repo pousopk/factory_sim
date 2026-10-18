@@ -16,7 +16,20 @@ namespace fsim {
 
 // What a drawn box belongs to, so a click can select it.
 struct Pick {
-    enum class Kind { None, Conveyor, Photocell, Spawner, Pusher, Diverter, Stopper, Bin, Camera };
+    enum class Kind {
+        None,
+        Conveyor,
+        Photocell,
+        Spawner,
+        Pusher,
+        Diverter,
+        Stopper,
+        Bin,
+        Camera,
+        Proximity,
+        Laser,
+        LightCurtain
+    };
     Kind kind = Kind::None;
     std::size_t index = 0;
 
@@ -61,6 +74,17 @@ std::vector<DrawBox> binBoxes(const Bin& bin, const ConveyorSpec& conveyor);
 // belt, which flashes white when it takes a picture and red when it ignores
 // a trigger. `now` is the simulated time, for the flashes.
 std::vector<DrawBox> cameraBoxes(const Camera& camera, const Conveyor& conveyor, double now);
+
+// A proximity switch: a threaded metal barrel with its face towards the belt
+// (or down at it), the LED on its back, and its switching distance drawn as
+// a faint disc in front of the face.
+std::vector<DrawBox> proximityBoxes(const Proximity& proximity, const Conveyor& conveyor);
+// A laser distance sensor over the belt, on a post, and its beam down to
+// what it measures, with the red spot there.
+std::vector<DrawBox> laserBoxes(const Laser& laser, const Conveyor& conveyor);
+// A light curtain: the emitter and receiver columns either side of the belt,
+// and its beams across, the broken ones missing.
+std::vector<DrawBox> curtainBoxes(const LightCurtain& curtain, const Conveyor& conveyor);
 
 // A spawner: a gate over the belt where its boxes appear.
 std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& conveyor);

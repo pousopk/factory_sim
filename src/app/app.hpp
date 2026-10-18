@@ -78,6 +78,10 @@ private:
     // in the main panel, and the Cameras window (which camera took which
     // item, and the gap study).
     void drawCameraInspector(std::size_t index);
+    // Proximity switches, lasers and light curtains (sensors.cpp).
+    void drawProximityInspector(std::size_t index);
+    void drawLaserInspector(std::size_t index);
+    void drawCurtainInspector(std::size_t index);
     void drawCameraTriggering();
     void drawCameras();
     void drawTinTable();

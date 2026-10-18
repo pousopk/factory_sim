@@ -3,6 +3,7 @@
 #include "sim/camera.hpp"
 #include "sim/control.hpp"
 #include "sim/conveyor_spec.hpp"
+#include "sim/field_sensors.hpp"
 #include "sim/io.hpp"
 #include "sim/physics.hpp"
 #include "sim/sensors.hpp"
@@ -48,8 +49,9 @@ struct SpawnerSpec {
     glm::vec3 size{0.2F, 0.15F, 0.2F}; // length (along the belt), height, width
     float offset = 0.2F;               // where boxes appear, metres from the belt's start
     bool enabled = true;
-    float nokFraction = 0.0F; // the share of boxes that are bad (NOK), at random: 0.25 = one in four
-    Shape shape = Shape::Box; // a tin: size is diameter, height, diameter
+    float nokFraction = 0.0F;  // the share of boxes that are bad (NOK), at random: 0.25 = one in four
+    Shape shape = Shape::Box;  // a tin: size is diameter, height, diameter
+    float heightJitter = 0.0F; // ± m at random on each item's height
     // Items arrive already moving with the belt, as from an infeed conveyor,
     // instead of being put down on it standing still.
     bool atBeltSpeed = false;
@@ -195,6 +197,14 @@ public:
     const std::vector<Camera>& cameras() const { return cameras_; }
     void triggerCamera(std::size_t camera); // now, by hand
 
+    // ---- Proximity switches, laser distance sensors, light curtains
+    // Settings while running: each keeps its state if it stays on its conveyor.
+    void setFieldSensors(const std::vector<ProximitySpec>& proximities, const std::vector<LaserSpec>& lasers,
+                         const std::vector<LightCurtainSpec>& curtains);
+    const std::vector<Proximity>& proximities() const { return proximities_; }
+    const std::vector<Laser>& lasers() const { return lasers_; }
+    const std::vector<LightCurtain>& curtains() const { return curtains_; }
+
     std::vector<Bin>& bins() { return bins_; }
     const std::vector<Bin>& bins() const { return bins_; }
 
@@ -232,6 +242,7 @@ private:
     void updateActuators(double stepStart, double stepEnd);
     void updateBins();
     void updateCameras(double stepEnd);
+    void updateFieldSensors(double stepStart, double stepEnd);
     static void recordSetpoint(Conveyor& conveyor, double time);
     void cameraTrigger(Camera& camera, double time);
     void scan(double time);
@@ -251,6 +262,9 @@ private:
     std::vector<Stopper> stoppers_;
     std::vector<Bin> bins_;
     std::vector<Camera> cameras_;
+    std::vector<Proximity> proximities_;
+    std::vector<Laser> lasers_;
+    std::vector<LightCurtain> curtains_;
     IoImage io_;
     std::unique_ptr<ControlProgram> program_;
     std::vector<ButtonSpec> buttons_;

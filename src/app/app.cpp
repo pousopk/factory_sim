@@ -216,6 +216,15 @@ void App::deleteSelected() {
     case Pick::Kind::Camera:
         removeCamera(scene(), selected_->index);
         break;
+    case Pick::Kind::Proximity:
+        removeProximity(scene(), selected_->index);
+        break;
+    case Pick::Kind::Laser:
+        removeLaser(scene(), selected_->index);
+        break;
+    case Pick::Kind::LightCurtain:
+        removeLightCurtain(scene(), selected_->index);
+        break;
     case Pick::Kind::None:
         break;
     }
@@ -254,6 +263,15 @@ void App::keepSelectionValid() {
     case Pick::Kind::Camera:
         count = s.cameras.size();
         break;
+    case Pick::Kind::Proximity:
+        count = s.proximities.size();
+        break;
+    case Pick::Kind::Laser:
+        count = s.lasers.size();
+        break;
+    case Pick::Kind::LightCurtain:
+        count = s.curtains.size();
+        break;
     case Pick::Kind::None:
         break;
     }
@@ -284,6 +302,12 @@ std::optional<std::size_t> App::selectedConveyor() const {
         return s.bins[selected_->index].conveyor;
     case Pick::Kind::Camera:
         return s.cameras[selected_->index].conveyor;
+    case Pick::Kind::Proximity:
+        return s.proximities[selected_->index].conveyor;
+    case Pick::Kind::Laser:
+        return s.lasers[selected_->index].conveyor;
+    case Pick::Kind::LightCurtain:
+        return s.curtains[selected_->index].conveyor;
     case Pick::Kind::None:
         break;
     }
@@ -384,6 +408,9 @@ void App::drawLinePanel() {
         selectable(fmt::format("{}  {:.2f} m{}###c{}", c.spec.name, c.spec.length, detail, i),
                    Pick{Pick::Kind::Conveyor, i});
     }
+    const auto conveyorName = [&](std::size_t c) {
+        return c < s.conveyors.size() ? s.conveyors[c].spec.name : std::string("?");
+    };
     ImGui::SeparatorText("Sensors and spawners");
     for (std::size_t i = 0; i < s.photocells.size(); ++i) {
         const auto& p = s.photocells[i];
@@ -391,15 +418,29 @@ void App::drawLinePanel() {
         selectable(fmt::format("{}  photocell on {} at {:.2f} m###p{}", p.name, on, p.along, i),
                    Pick{Pick::Kind::Photocell, i});
     }
+    for (std::size_t i = 0; i < s.proximities.size(); ++i) {
+        const auto& p = s.proximities[i];
+        selectable(fmt::format("{}  {} switch on {} at {:.2f} m###px{}", p.name,
+                               p.inductive ? "inductive" : "capacitive", conveyorName(p.conveyor), p.along, i),
+                   Pick{Pick::Kind::Proximity, i});
+    }
+    for (std::size_t i = 0; i < s.lasers.size(); ++i) {
+        const auto& l = s.lasers[i];
+        selectable(fmt::format("{}  laser over {} at {:.2f} m###la{}", l.name, conveyorName(l.conveyor), l.along, i),
+                   Pick{Pick::Kind::Laser, i});
+    }
+    for (std::size_t i = 0; i < s.curtains.size(); ++i) {
+        const auto& c = s.curtains[i];
+        selectable(
+            fmt::format("{}  light curtain on {} at {:.2f} m###lc{}", c.name, conveyorName(c.conveyor), c.along, i),
+            Pick{Pick::Kind::LightCurtain, i});
+    }
     for (std::size_t i = 0; i < s.spawners.size(); ++i) {
         const auto& sp = s.spawners[i];
         const auto on = sp.conveyor < s.conveyors.size() ? s.conveyors[sp.conveyor].spec.name : std::string("?");
         selectable(fmt::format("spawner on {}, every {:.2f} s###s{}", on, sp.interval, i),
                    Pick{Pick::Kind::Spawner, i});
     }
-    const auto conveyorName = [&](std::size_t c) {
-        return c < s.conveyors.size() ? s.conveyors[c].spec.name : std::string("?");
-    };
     ImGui::SeparatorText("Actuators and bins");
     for (std::size_t i = 0; i < s.pushers.size(); ++i) {
         const auto& a = s.pushers[i];
@@ -482,6 +523,19 @@ void App::drawLinePanel() {
         selected_ = Pick{Pick::Kind::Camera, addCamera(s, *conveyor)};
     }
     ImGui::SetItemTooltip("Over the selected conveyor, looking down");
+    if (ImGui::SmallButton("Proximity")) {
+        selected_ = Pick{Pick::Kind::Proximity, addProximity(s, *conveyor)};
+    }
+    ImGui::SetItemTooltip("An inductive proximity switch on the left of the selected conveyor");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Laser")) {
+        selected_ = Pick{Pick::Kind::Laser, addLaser(s, *conveyor)};
+    }
+    ImGui::SetItemTooltip("A laser distance sensor over the selected conveyor, looking down");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Light curtain")) {
+        selected_ = Pick{Pick::Kind::LightCurtain, addLightCurtain(s, *conveyor)};
+    }
     ImGui::EndDisabled();
     ImGui::SameLine();
     ImGui::BeginDisabled(!selected_);
@@ -526,6 +580,15 @@ void App::drawInspector() {
             break;
         case Pick::Kind::Camera:
             drawCameraInspector(selected_->index);
+            break;
+        case Pick::Kind::Proximity:
+            drawProximityInspector(selected_->index);
+            break;
+        case Pick::Kind::Laser:
+            drawLaserInspector(selected_->index);
+            break;
+        case Pick::Kind::LightCurtain:
+            drawCurtainInspector(selected_->index);
             break;
         case Pick::Kind::None:
             break;
@@ -1093,6 +1156,16 @@ void App::drawIoTable() {
         actuator(a, "diverter");
     for (const auto& a : s.stoppers)
         actuator(a, "stopper");
+    for (const auto& p : s.proximities) {
+        add(p.input, p.name + (p.inductive ? " inductive switch" : " capacitive switch"));
+    }
+    for (const auto& l : s.lasers) {
+        add(l.output, l.name + " laser distance");
+    }
+    for (const auto& c : s.curtains) {
+        add(c.clearInput, c.name + " light curtain clear");
+        add(c.countInput, c.name + " light curtain beams broken");
+    }
     for (const auto& c : s.cameras) {
         add(c.triggerOutput, c.name + " camera trigger");
         add(c.readyInput, c.name + " camera ready");

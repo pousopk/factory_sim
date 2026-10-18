@@ -242,6 +242,16 @@ std::vector<IoAddress> usedAddresses(const Scene& scene) {
     for (const auto& p : scene.potentiometers) {
         add(p.address);
     }
+    for (const auto& p : scene.proximities) {
+        add(p.input);
+    }
+    for (const auto& l : scene.lasers) {
+        add(l.output);
+    }
+    for (const auto& c : scene.curtains) {
+        add(c.clearInput);
+        add(c.countInput);
+    }
     for (const auto& p : scene.photocells) {
         add(p.input);
     }
@@ -456,6 +466,7 @@ std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make) 
     for (const auto& camera : scene.cameras) {
         world->addCamera(camera); // (one on a missing conveyor sees nothing)
     }
+    world->setFieldSensors(scene.proximities, scene.lasers, scene.curtains);
     world->setPanel(scene.buttons, scene.lamps, scene.potentiometers);
     world->setProgram(make(scene));
     return world;
@@ -471,6 +482,7 @@ void applyLive(World& world, const Scene& scene) {
     world.setStrokes(scene.pushers, scene.diverters, scene.stoppers);
     world.setPanel(scene.buttons, scene.lamps, scene.potentiometers);
     world.setCameras(scene.cameras);
+    world.setFieldSensors(scene.proximities, scene.lasers, scene.curtains);
 }
 
 // ---------------------------------------------------------------- Editing
@@ -541,6 +553,9 @@ void removeConveyor(Scene& scene, std::size_t conveyor) {
     dropFrom(scene.stoppers, conveyor);
     dropFrom(scene.bins, conveyor);
     dropFrom(scene.cameras, conveyor);
+    dropFrom(scene.proximities, conveyor);
+    dropFrom(scene.lasers, conveyor);
+    dropFrom(scene.curtains, conveyor);
 }
 
 std::size_t addPusher(Scene& scene, std::size_t conveyor) {
@@ -656,6 +671,94 @@ Scene driveDemo(std::string program) {
     return scene;
 }
 
+Scene sensorsDemo() {
+    Scene scene;
+    PlacedConveyor conveyor;
+    conveyor.spec.name = "C1";
+    conveyor.spec.length = 4.0F;
+    conveyor.spec.width = 0.10F; // a narrow lane between guides: items pass close to the switches
+    conveyor.spec.targetSpeed = 0.4F;
+    conveyor.spec.guideLeft = true;
+    conveyor.spec.guideRight = true;
+    scene.conveyors.push_back(conveyor);
+    // Cardboard boxes of different heights, and tins, from the same infeed.
+    SpawnerSpec boxes;
+    boxes.size = {0.12F, 0.09F, 0.09F};
+    boxes.heightJitter = 0.03F;
+    boxes.interval = 1.6;
+    boxes.atBeltSpeed = true;
+    scene.spawners.push_back(boxes);
+    SpawnerSpec tins;
+    tins.shape = Shape::Tin;
+    tins.size = {0.073F, 0.11F, 0.073F};
+    tins.interval = 2.3;
+    tins.atBeltSpeed = true;
+    scene.spawners.push_back(tins);
+    // M30 proximity switches on the left guide, 15 mm sn: the tins pass 13.5 mm
+    // from them, the boxes 5 mm.
+    const auto proximity = [&](const char* name, float along, bool inductive) {
+        const auto index = addProximity(scene, 0);
+        auto& p = scene.proximities[index];
+        p.name = name;
+        p.along = along;
+        p.inductive = inductive;
+        p.faceDiameter = 0.030F;
+        p.range = 0.015F;
+        p.height = 0.04F;
+    };
+    proximity("BI1", 1.2F, true);  // inductive: tins only
+    proximity("BK1", 1.6F, false); // capacitive: tins, and boxes (cardboard, closer)
+    const auto laser = addLaser(scene, 0);
+    scene.lasers[laser].along = 2.2F;
+    scene.lasers[laser].mountHeight = 0.5F;
+    scene.lasers[laser].rangeMin = 0.25F; // 0 to 250 mm high items: 0..27648
+    scene.lasers[laser].rangeMax = 0.5F;
+    const auto curtain = addLightCurtain(scene, 0);
+    scene.curtains[curtain].along = 2.8F;
+    return scene;
+}
+
+std::size_t addProximity(Scene& scene, std::size_t conveyor) {
+    ProximitySpec p;
+    p.name = freeName(scene.proximities, "BP", [](const ProximitySpec& s) { return s.name; });
+    p.conveyor = conveyor;
+    p.along = scene.conveyors.at(conveyor).spec.length * 0.4F;
+    p.input = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
+    scene.proximities.push_back(p);
+    return scene.proximities.size() - 1;
+}
+
+std::size_t addLaser(Scene& scene, std::size_t conveyor) {
+    LaserSpec l;
+    l.name = freeName(scene.lasers, "BL", [](const LaserSpec& s) { return s.name; });
+    l.conveyor = conveyor;
+    l.along = scene.conveyors.at(conveyor).spec.length * 0.5F;
+    l.output = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Word);
+    scene.lasers.push_back(l);
+    return scene.lasers.size() - 1;
+}
+
+std::size_t addLightCurtain(Scene& scene, std::size_t conveyor) {
+    LightCurtainSpec c;
+    c.name = freeName(scene.curtains, "BC", [](const LightCurtainSpec& s) { return s.name; });
+    c.conveyor = conveyor;
+    c.along = scene.conveyors.at(conveyor).spec.length * 0.7F;
+    c.clearInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
+    scene.curtains.push_back(c); // the clear bit taken before the word is looked for
+    scene.curtains.back().countInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Word);
+    return scene.curtains.size() - 1;
+}
+
+void removeProximity(Scene& scene, std::size_t index) {
+    eraseAt(scene.proximities, index);
+}
+void removeLaser(Scene& scene, std::size_t index) {
+    eraseAt(scene.lasers, index);
+}
+void removeLightCurtain(Scene& scene, std::size_t index) {
+    eraseAt(scene.curtains, index);
+}
+
 std::size_t addCamera(Scene& scene, std::size_t conveyor) {
     CameraSpec camera;
     camera.name = freeName(scene.cameras, "K", [](const CameraSpec& c) { return c.name; });
@@ -765,6 +868,21 @@ Control controlFrom(const std::string& name) {
     return Control::Manual;
 }
 
+const char* mountName(Mount mount) {
+    switch (mount) {
+    case Mount::Above:
+        return "above";
+    case Mount::Right:
+        return "right";
+    case Mount::Left:
+        break;
+    }
+    return "left";
+}
+Mount mountFrom(const std::string& name) {
+    return name == "above" ? Mount::Above : name == "right" ? Mount::Right : Mount::Left;
+}
+
 const char* sideName(Side side) {
     return side == Side::Left ? "left" : "right";
 }
@@ -846,6 +964,7 @@ std::string sceneToJson(const Scene& scene) {
                                     {"enabled", s.enabled},
                                     {"nokFraction", s.nokFraction},
                                     {"shape", s.shape == Shape::Tin ? "tin" : "box"},
+                                    {"heightJitter", s.heightJitter},
                                     {"atBeltSpeed", s.atBeltSpeed}});
     }
     for (const auto& p : scene.pushers) {
@@ -889,6 +1008,46 @@ std::string sceneToJson(const Scene& scene) {
                                    {"readout", c.readout},
                                    {"triggerOutput", c.triggerOutput},
                                    {"readyInput", c.readyInput}});
+    }
+    data["proximities"] = json::array();
+    for (const auto& p : scene.proximities) {
+        data["proximities"].push_back({{"name", p.name},
+                                       {"conveyor", p.conveyor},
+                                       {"along", p.along},
+                                       {"mount", mountName(p.mount)},
+                                       {"inductive", p.inductive},
+                                       {"faceDiameter", p.faceDiameter},
+                                       {"range", p.range},
+                                       {"height", p.height},
+                                       {"inset", p.inset},
+                                       {"responseTime", p.responseTime},
+                                       {"input", p.input}});
+    }
+    data["lasers"] = json::array();
+    for (const auto& l : scene.lasers) {
+        data["lasers"].push_back({{"name", l.name},
+                                  {"conveyor", l.conveyor},
+                                  {"along", l.along},
+                                  {"across", l.across},
+                                  {"mountHeight", l.mountHeight},
+                                  {"rangeMin", l.rangeMin},
+                                  {"rangeMax", l.rangeMax},
+                                  {"resolution", l.resolution},
+                                  {"noise", l.noise},
+                                  {"measureTime", l.measureTime},
+                                  {"output", l.output}});
+    }
+    data["curtains"] = json::array();
+    for (const auto& c : scene.curtains) {
+        data["curtains"].push_back({{"name", c.name},
+                                    {"conveyor", c.conveyor},
+                                    {"along", c.along},
+                                    {"beams", c.beams},
+                                    {"pitch", c.pitch},
+                                    {"lowest", c.lowest},
+                                    {"scanTime", c.scanTime},
+                                    {"clearInput", c.clearInput},
+                                    {"countInput", c.countInput}});
     }
     data["buttons"] = json::array();
     for (const auto& b : scene.buttons) {
@@ -1012,6 +1171,7 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             spawner.enabled = s.value("enabled", spawner.enabled);
             spawner.nokFraction = s.value("nokFraction", spawner.nokFraction);
             spawner.shape = s.value("shape", std::string("box")) == "tin" ? Shape::Tin : Shape::Box;
+            spawner.heightJitter = s.value("heightJitter", 0.0F);
             spawner.atBeltSpeed = s.value("atBeltSpeed", false);
             if (auto ok = checkConveyor(spawner.conveyor, "a spawner"); !ok) {
                 return tl::unexpected(ok.error());
@@ -1088,6 +1248,58 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
                 return tl::unexpected(ok.error());
             }
             scene.cameras.push_back(c);
+        }
+        for (const auto& j : data.value("proximities", json::array())) {
+            ProximitySpec p;
+            p.name = j.value("name", p.name);
+            p.conveyor = j.value("conveyor", p.conveyor);
+            p.along = j.value("along", p.along);
+            p.mount = mountFrom(j.value("mount", std::string("left")));
+            p.inductive = j.value("inductive", p.inductive);
+            p.faceDiameter = j.value("faceDiameter", p.faceDiameter);
+            p.range = j.value("range", p.range);
+            p.height = j.value("height", p.height);
+            p.inset = j.value("inset", p.inset);
+            p.responseTime = j.value("responseTime", p.responseTime);
+            p.input = j.value("input", std::string());
+            if (auto ok = checkConveyor(p.conveyor, "proximity switch " + p.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.proximities.push_back(p);
+        }
+        for (const auto& j : data.value("lasers", json::array())) {
+            LaserSpec l;
+            l.name = j.value("name", l.name);
+            l.conveyor = j.value("conveyor", l.conveyor);
+            l.along = j.value("along", l.along);
+            l.across = j.value("across", l.across);
+            l.mountHeight = j.value("mountHeight", l.mountHeight);
+            l.rangeMin = j.value("rangeMin", l.rangeMin);
+            l.rangeMax = j.value("rangeMax", l.rangeMax);
+            l.resolution = j.value("resolution", l.resolution);
+            l.noise = j.value("noise", l.noise);
+            l.measureTime = j.value("measureTime", l.measureTime);
+            l.output = j.value("output", std::string());
+            if (auto ok = checkConveyor(l.conveyor, "laser " + l.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.lasers.push_back(l);
+        }
+        for (const auto& j : data.value("curtains", json::array())) {
+            LightCurtainSpec c;
+            c.name = j.value("name", c.name);
+            c.conveyor = j.value("conveyor", c.conveyor);
+            c.along = j.value("along", c.along);
+            c.beams = j.value("beams", c.beams);
+            c.pitch = j.value("pitch", c.pitch);
+            c.lowest = j.value("lowest", c.lowest);
+            c.scanTime = j.value("scanTime", c.scanTime);
+            c.clearInput = j.value("clearInput", std::string());
+            c.countInput = j.value("countInput", std::string());
+            if (auto ok = checkConveyor(c.conveyor, "light curtain " + c.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.curtains.push_back(c);
         }
         for (const auto& j : data.value("buttons", json::array())) {
             ButtonSpec b;

@@ -36,7 +36,6 @@ struct PotentiometerSpec {
 
     bool operator==(const PotentiometerSpec&) const = default;
 };
-constexpr int kAnalogFullScale = 27648;
 
 struct LampSpec {
     std::string name = "Running";

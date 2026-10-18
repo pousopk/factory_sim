@@ -140,6 +140,11 @@ void App::drawMenuBar() {
             }
             ImGui::SetItemTooltip("A belt driven over PROFIdrive telegram 1 by examples/drive.st:\n"
                                   "press Start, turn the Speed potentiometer");
+            if (ImGui::MenuItem("Sensors")) {
+                startNew(sensorsDemo());
+            }
+            ImGui::SetItemTooltip("Boxes of different heights and tins past an inductive and a capacitive\n"
+                                  "proximity switch, a laser measuring heights, and a light curtain");
             if (ImGui::MenuItem("Tins and cameras")) {
                 startNew(tinDemo());
             }

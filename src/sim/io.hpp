@@ -33,6 +33,10 @@ std::optional<IoAddress> parseAddress(std::string_view text);
 // Writes it the way parseAddress reads it: "%IX0.3", "%QX1.0", "%IW4", "%ID8".
 std::string formatAddress(const IoAddress& address);
 
+// Siemens' analog range: an analog input module gives 0 to 27648 for its
+// nominal range (0-10 V, 4-20 mA), with room above it for overrange.
+constexpr int kAnalogFullScale = 27648;
+
 class IoImage {
 public:
     // Per area. Bytes 0-7 hold bits (sensors, valves, buttons), 8 on words
