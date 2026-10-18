@@ -41,6 +41,7 @@ The simulator should reproduce this and answer: at a given conveyor speed and ti
 9. Files: Open, Save As, recent scenes, the untitled scene, and a remembered window layout
 10. Analog I/O and drives: words in the I/O image, a drive on the bus (PROFIdrive telegram 1), potentiometers
 11. Sensors: inductive and capacitive proximity switches, a laser distance sensor, a light curtain
+12. Looks and performance: the physics on several threads, instanced drawing, shadows, names in 3D
 
 ## Building
 
@@ -53,13 +54,21 @@ cd factory_sim
 ```
 
 ```bash
-cmake -S . -B build          # Debug by default, with AddressSanitizer + UBSan
+cmake -S . -B build          # Release by default
 cmake --build build -j
 ctest --test-dir build --output-on-failure
 ./build/factory_sim
 ```
 
-The first configure downloads its dependencies (Jolt Physics, glm, Dear ImGui, ImPlot, {fmt}, nlohmann/json, tl::expected, doctest), and uses `soft_plc` from `../soft_plc` next to it (or `-DFACTORY_SIM_SOFT_PLC_DIR=...`), which brings Snap7. The application needs GLFW and OpenGL 3.3 development files (`libglfw3-dev`, `libgl-dev`); without them, configure with `-DFACTORY_SIM_BUILD_APP=OFF` to build the simulation and its tests only. For smooth frame rates, build Release (`-DCMAKE_BUILD_TYPE=Release`): the sanitizers make the Debug build several times slower.
+For chasing bugs, a Debug build adds AddressSanitizer and UBSan (several times slower):
+
+```bash
+cmake -S . -B build-debug -DCMAKE_BUILD_TYPE=Debug
+```
+
+`./build/factory_sim_bench` measures how long a simulation step takes on a busy line (about 540 boxes), or on a scene file you give it, with `threads=N` to compare thread counts.
+
+The first configure downloads its dependencies (Jolt Physics, glm, Dear ImGui, ImPlot, {fmt}, nlohmann/json, tl::expected, doctest), and uses `soft_plc` from `../soft_plc` next to it (or `-DFACTORY_SIM_SOFT_PLC_DIR=...`), which brings Snap7. The application needs GLFW and OpenGL 3.3 development files (`libglfw3-dev`, `libgl-dev`); without them, configure with `-DFACTORY_SIM_BUILD_APP=OFF` to build the simulation and its tests only.
 
 ## Using it
 
@@ -90,6 +99,8 @@ The scene is saved after every change; there's no Save button and the file isn't
 
 **Cameras and the tin line.** A **camera** (added over the selected conveyor) looks at a stretch of belt, its field of view, drawn on the belt. A rising edge on its trigger output takes a picture: after its own trigger delay it exposes (things moving smear by speed x exposure: the inspector shows it in pixels), then reads the picture out; until then it's **busy** (its LED, and its ready input off) and **ignores** any trigger. Its field of view flashes white for a picture and red for an ignored trigger. Spawners can make **tins** (upright cylinders) and let items arrive **at belt speed**, as from an infeed. The program **built-in camera triggering** triggers each camera a set time after a photocell sees an item, delayed either by **one timer** (an item arriving while it runs gets no trigger) or by **a queue, per item**; **Add trigger** works out the delay from the layout. **File > New from a demo > Tins and cameras** builds the reference scenario: tins at 1 m/s, one photocell, three cameras at the photocell and a fourth 15 cm on, triggered 150 ms later by one timer. The **Cameras** window shows, tin by tin, which camera took it (and how far from the middle of the picture), and which missed it because it was busy or never got a trigger. Its **Gap study** runs the line's timing alone (the real photocell logic and control program, scan by scan, the cameras' busy times, tins placed exactly) for every gap from 0, a few times across the scan, and gives the smallest gap from which every camera takes every tin: 87.5 mm in the demo (K1-K3 alone: 10 mm). `examples/tin_cameras.st` is the same triggering in ST for soft_plc, with identical results.
 
+**Performance.** The physics runs on several threads (up to 8), with exactly the same results as on one. When a line is too busy to simulate in real time, the main panel says *behind*, and the simulation runs slower than real time instead of freezing the window. The main panel also shows what drawing costs: boxes, draw calls, CPU and GPU time. **View** turns the **shadows** and the **names in 3D** on and off.
+
 **The main panel** runs simulated time: **Pause**, then **Step 1 ms** to watch a box move exactly speed x 1 ms per step, or a time scale of 0.1x to watch it in slow motion with exactly the same physics. **Restart** starts the run again.
 
 **The Triggers window** lists each time the selected photocell switched on: when the beam was covered and when the output switched (exact to a fraction of a millisecond), how far past the beam the box's front edge was then, the same as a PLC scanning every few milliseconds would see it, and the encoder count. A see-through box shows where the last triggered box was at its output time.
@@ -105,6 +116,7 @@ The scene is saved after every change; there's no Save button and the file isn't
 | `examples/` | The conveyor line and ladder_editor's conveyor program exported to ST; the tin line's camera triggering in ST; a drive driven over PROFIdrive telegram 1 (`drive.st`) |
 | `src/render/` | What to draw and what a click hits (`scene.hpp`) and from where (`orbit_camera.hpp`), all plain geometry; the OpenGL renderer and shaders |
 | `src/app/` | The application: window, frame loop, panels (`app.cpp`), the logic analyser (`analyser.cpp`), the cameras' panels (`cameras.cpp`), shared widgets |
+| `tools/` | `factory_sim_bench`, the simulation step benchmark |
 | `tests/` | doctest unit tests, mirroring `src/`; they run the simulation headless |
 | `docs/lessons/` | What each milestone teaches, with review questions |
 | `docs/topics/` | One subject at a time across the whole project: the GPU and OpenGL, 3D maths, shaders, numbers and time, the physics engine, design notes |

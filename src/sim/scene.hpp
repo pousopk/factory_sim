@@ -130,7 +130,8 @@ SorterSpec sorterFor(const Scene& scene, std::size_t photocell, std::size_t push
 
 // A new world for the scene (no boxes yet, time 0), controlled by the program
 // `make` gives (by default, makeProgram).
-std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make = makeProgram);
+// `physicsThreads` as for World (0: as many as useful).
+std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make = makeProgram, int physicsThreads = 0);
 
 // Gives a running world the scene's settings (speeds, sensors, spawners),
 // keeping its boxes and time. Only for a scene with the same layout as the

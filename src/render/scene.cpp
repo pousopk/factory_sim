@@ -476,6 +476,73 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
     return boxes;
 }
 
+std::vector<Label> sceneLabels(const World& world) {
+    std::vector<Label> labels;
+    const auto& conveyors = world.conveyors();
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    const auto on = [&](std::size_t conveyor) { return conveyor < conveyors.size(); };
+    // A point `height` above the belt at `along`, off to the side by `side` (left positive).
+    const auto above = [&](std::size_t conveyor, float along, float height, float side = 0.0F) {
+        const auto& c = conveyors[conveyor];
+        return c.beltPoint(along) + up * height + leftOf(c.direction()) * side;
+    };
+    for (std::size_t i = 0; i < conveyors.size(); ++i) {
+        labels.push_back(Label{above(i, conveyors[i].spec.length / 2.0F, 0.0F, -conveyors[i].spec.width / 2.0F - 0.1F),
+                               conveyors[i].spec.name, Pick{Pick::Kind::Conveyor, i}});
+    }
+    for (std::size_t i = 0; i < world.photocells().size(); ++i) {
+        const auto& p = world.photocells()[i].spec;
+        if (on(p.conveyor)) {
+            const float side = conveyors[p.conveyor].spec.width / 2.0F + kFrameWidth + kHousingSize;
+            labels.push_back(
+                Label{above(p.conveyor, p.along, p.height + 0.08F, side), p.name, Pick{Pick::Kind::Photocell, i}});
+        }
+    }
+    for (std::size_t i = 0; i < world.proximities().size(); ++i) {
+        const auto& p = world.proximities()[i].spec;
+        if (on(p.conveyor)) {
+            labels.push_back(
+                Label{above(p.conveyor, p.along, p.height + 0.06F), p.name, Pick{Pick::Kind::Proximity, i}});
+        }
+    }
+    for (std::size_t i = 0; i < world.lasers().size(); ++i) {
+        const auto& l = world.lasers()[i].spec;
+        if (on(l.conveyor)) {
+            labels.push_back(
+                Label{above(l.conveyor, l.along, l.mountHeight + 0.15F, l.across), l.name, Pick{Pick::Kind::Laser, i}});
+        }
+    }
+    for (std::size_t i = 0; i < world.curtains().size(); ++i) {
+        const auto& c = world.curtains()[i].spec;
+        if (on(c.conveyor)) {
+            const float top = c.lowest + static_cast<float>(std::max(c.beams - 1, 0)) * c.pitch + 0.08F;
+            labels.push_back(Label{above(c.conveyor, c.along, top), c.name, Pick{Pick::Kind::LightCurtain, i}});
+        }
+    }
+    const auto actuator = [&](const auto& list, Pick::Kind kind) {
+        for (std::size_t i = 0; i < list.size(); ++i) {
+            const auto& spec = list[i].spec;
+            if (on(spec.conveyor)) {
+                labels.push_back(Label{above(spec.conveyor, spec.along, 0.25F), spec.name, Pick{kind, i}});
+            }
+        }
+    };
+    actuator(world.pushers(), Pick::Kind::Pusher);
+    actuator(world.diverters(), Pick::Kind::Diverter);
+    actuator(world.stoppers(), Pick::Kind::Stopper);
+    actuator(world.bins(), Pick::Kind::Bin);
+    for (std::size_t i = 0; i < world.cameras().size(); ++i) {
+        const auto& c = world.cameras()[i].spec;
+        if (on(c.conveyor)) {
+            labels.push_back(
+                Label{above(c.conveyor, c.along, 0.0F) +
+                          (up * std::cos(c.tilt) + leftOf(conveyors[c.conveyor].direction()) * std::sin(c.tilt)) * 0.5F,
+                      c.name, Pick{Pick::Kind::Camera, i}});
+        }
+    }
+    return labels;
+}
+
 std::optional<float> hitDistance(const DrawBox& box, glm::vec3 origin, glm::vec3 direction) {
     // In the box's own axes the box is axis-aligned, from -half to +half:
     // the ray enters it at the latest of the three entry points and leaves

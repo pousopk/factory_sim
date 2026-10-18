@@ -433,8 +433,8 @@ bool sameLayout(const Scene& a, const Scene& b) {
     return true;
 }
 
-std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make) {
-    auto world = std::make_unique<World>();
+std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make, int physicsThreads) {
+    auto world = std::make_unique<World>(physicsThreads);
     for (const auto& spec : placeConveyors(scene)) {
         world->addConveyor(spec);
     }

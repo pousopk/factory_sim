@@ -1,4 +1,5 @@
 #include "render/scene.hpp"
+#include "sim/scene.hpp"
 #include <algorithm>
 #include <cmath>
 #include <doctest/doctest.h>
@@ -139,4 +140,26 @@ TEST_CASE("Clicking picks the nearest selectable thing; its parts are highlighte
     CHECK_FALSE(pickAt(boxes, {9.0F, 3.0F, 9.0F}, {0.0F, -1.0F, 0.0F}).has_value()); // nothing there
     const auto highlighted = std::count_if(boxes.begin(), boxes.end(), [](const DrawBox& b) { return b.highlight; });
     CHECK(highlighted == 4); // the photocell's four parts
+}
+
+TEST_CASE("Every named device has a label just above it") {
+    auto scene = sensorsDemo();
+    addPusher(scene, 0);
+    const auto world = buildWorld(scene);
+    const auto labels = sceneLabels(*world);
+    const auto find = [&](const std::string& text) {
+        return std::find_if(labels.begin(), labels.end(), [&](const Label& l) { return l.text == text; });
+    };
+    for (const char* name : {"C1", "BI1", "BK1", "BL1", "BC1", "P1"}) {
+        CAPTURE(name);
+        CHECK(find(name) != labels.end());
+    }
+    // Above the belt, near the device along it.
+    const auto laser = find("BL1");
+    REQUIRE(laser != labels.end());
+    CHECK(laser->pick == Pick{Pick::Kind::Laser, 0});
+    CHECK(laser->position.y > scene.conveyors[0].spec.beltHeight + scene.lasers[0].mountHeight);
+    CHECK(laser->position.x == doctest::Approx(scene.lasers[0].along));
+    const auto conveyor = find("C1");
+    CHECK(conveyor->position.x == doctest::Approx(scene.conveyors[0].spec.length / 2.0F));
 }

@@ -137,7 +137,7 @@ private:
     const std::vector<Conveyor>& conveyors_;
 };
 
-World::World() : contacts_(std::make_unique<ConveyorContacts>(conveyors_)) {
+World::World(int physicsThreads) : physics_(physicsThreads), contacts_(std::make_unique<ConveyorContacts>(conveyors_)) {
     physics_.setContactListener(contacts_.get());
 
     // A big floor, its top surface at y = 0.

@@ -1,9 +1,11 @@
 #include "sim/physics.hpp"
 #include <Jolt/Core/Factory.h>
 #include <Jolt/RegisterTypes.h>
+#include <algorithm>
 #include <cstdarg>
 #include <cstdio>
 #include <mutex>
+#include <thread>
 
 namespace fsim {
 
@@ -73,13 +75,24 @@ public:
     }
 };
 
-Physics::Physics() {
+Physics::Physics(int threads) {
     initialiseJoltOnce();
     broadPhaseLayers_ = std::make_unique<BroadPhaseLayers>();
     objectVsBroadPhase_ = std::make_unique<ObjectVsBroadPhaseFilter>();
     objectPairs_ = std::make_unique<ObjectPairFilter>();
     tempAllocator_ = std::make_unique<JPH::TempAllocatorImpl>(16 * 1024 * 1024);
-    jobs_ = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+    if (threads <= 0) {
+        // All but one core (for the window and the rest), and no more than 8:
+        // past that, a few hundred boxes don't give each thread enough to do.
+        threads = std::clamp(static_cast<int>(std::thread::hardware_concurrency()) - 1, 1, 8);
+    }
+    threads_ = threads;
+    if (threads == 1) {
+        jobs_ = std::make_unique<JPH::JobSystemSingleThreaded>(JPH::cMaxPhysicsJobs);
+    } else {
+        // The pool's own threads, plus the caller, which works too while it waits.
+        jobs_ = std::make_unique<JPH::JobSystemThreadPool>(JPH::cMaxPhysicsJobs, JPH::cMaxPhysicsBarriers, threads - 1);
+    }
 
     system_ = std::make_unique<JPH::PhysicsSystem>();
     constexpr JPH::uint maxBodies = 8192;

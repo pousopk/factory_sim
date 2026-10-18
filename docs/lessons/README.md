@@ -17,3 +17,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 9. Files | [09-files.md](09-files.md) |
 | 10. Analog I/O and drives | [10-drives.md](10-drives.md) |
 | 11. More sensors | [11-sensors.md](11-sensors.md) |
+| 12. Looks and performance | [12-performance.md](12-performance.md) |

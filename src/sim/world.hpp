@@ -104,7 +104,8 @@ class World {
 public:
     static constexpr double kStep = 0.001; // seconds per simulation step
 
-    World();
+    // `physicsThreads`: how many threads step the physics (0: as many as useful).
+    explicit World(int physicsThreads = 0);
     ~World();
     World(const World&) = delete;
     World& operator=(const World&) = delete;
@@ -142,6 +143,7 @@ public:
     // takes. For tests and measurements; the app uses advance().
     void run(double seconds);
 
+    int physicsThreads() const { return physics_.threads(); }
     double time() const { return static_cast<double>(stepCount_) * kStep; }
     std::uint64_t stepCount() const { return stepCount_; }
 

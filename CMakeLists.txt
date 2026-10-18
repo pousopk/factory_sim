@@ -10,8 +10,10 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# Release by default: the simulator should run in real time. Debug
+# (-DCMAKE_BUILD_TYPE=Debug) adds the sanitizers, for chasing bugs.
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
-  set(CMAKE_BUILD_TYPE Debug CACHE STRING "Build type" FORCE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
 option(FACTORY_SIM_SANITIZERS "Build Debug builds with AddressSanitizer and UBSan" ON)
@@ -118,6 +120,10 @@ add_library(factory_sim_plc STATIC
 )
 target_include_directories(factory_sim_plc PUBLIC src)
 target_link_libraries(factory_sim_plc PUBLIC factory_sim_core PRIVATE soft_plc_core snap7_static fmt::fmt)
+
+# A benchmark: how long a simulation step takes on a busy line.
+add_executable(factory_sim_bench tools/bench.cpp)
+target_link_libraries(factory_sim_bench PRIVATE factory_sim_core)
 
 # --- What to draw and where from: plain geometry, no OpenGL, so it's tested too ---
 add_library(factory_sim_view STATIC

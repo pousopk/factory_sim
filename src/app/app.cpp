@@ -4,6 +4,7 @@
 #include "plc/s7_link.hpp"
 #include "plc/soft_plc_program.hpp"
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <fmt/format.h>
 #include <imgui.h>
@@ -111,9 +112,52 @@ void App::frame(double realSeconds, int width, int height) {
     // turn into a burst of simulation: at most a quarter of a second at once.
     realSeconds = std::min(realSeconds, 0.25);
     frameSeconds_ = realSeconds;
-    stepsLastFrame_ = paused_ ? 0 : world_->advance(realSeconds * timeScale_);
+    // A time budget for the simulation: as many steps as fit in about 25 ms
+    // (judged by what steps have cost lately). A line too busy to simulate in
+    // real time then runs slower than real time, instead of freezing the
+    // window for a quarter of a second every frame trying to catch up.
+    constexpr double kBudgetMilliseconds = 25.0;
+    const int maxSteps = std::clamp(static_cast<int>(kBudgetMilliseconds / std::max(stepMilliseconds_, 1e-3)), 10, 250);
+    const auto stepping = std::chrono::steady_clock::now();
+    stepsLastFrame_ = paused_ ? 0 : world_->advance(realSeconds * timeScale_, maxSteps);
+    if (stepsLastFrame_ > 0) {
+        const double spent =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - stepping).count();
+        stepMilliseconds_ = 0.8 * stepMilliseconds_ + 0.2 * spent / stepsLastFrame_; // smoothed
+    }
+    behind_ = !paused_ && stepsLastFrame_ == maxSteps;
     finishFiring();
     renderer_.draw(sceneBoxes(*world_, 1.0, selected_), camera_, width, height);
+    if (showNames_) {
+        drawNames(width, height);
+    }
+}
+
+// Each device's name, at its place in the view: projected through the
+// camera like a vertex, then written by ImGui behind its windows.
+void App::drawNames(int width, int height) {
+    const auto& io = ImGui::GetIO();
+    const float aspect = height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
+    const auto viewProjection = camera_.projection(aspect) * camera_.view();
+    auto* draw = ImGui::GetBackgroundDrawList();
+    for (const auto& label : sceneLabels(*world_)) {
+        const glm::vec4 clip = viewProjection * glm::vec4(label.position, 1.0F);
+        if (clip.w <= 0.01F) {
+            continue; // behind the camera
+        }
+        const glm::vec2 ndc = glm::vec2(clip) / clip.w;
+        if (std::abs(ndc.x) > 1.1F || std::abs(ndc.y) > 1.1F) {
+            continue;
+        }
+        // In ImGui's window points, y down (the framebuffer may have more pixels).
+        const ImVec2 size = ImGui::CalcTextSize(label.text.c_str());
+        const ImVec2 at((ndc.x * 0.5F + 0.5F) * io.DisplaySize.x - size.x / 2.0F,
+                        (0.5F - ndc.y * 0.5F) * io.DisplaySize.y - size.y);
+        const bool selected = selected_ == label.pick;
+        draw->AddRectFilled(ImVec2(at.x - 3.0F, at.y - 1.0F), ImVec2(at.x + size.x + 3.0F, at.y + size.y + 1.0F),
+                            selected ? IM_COL32(40, 90, 170, 200) : IM_COL32(0, 0, 0, 120), 3.0F);
+        draw->AddText(at, IM_COL32(235, 238, 245, 255), label.text.c_str());
+    }
 }
 
 void App::followScene() {
@@ -343,6 +387,16 @@ void App::drawMainPanel() {
     ImGui::SetItemTooltip("How fast simulated time runs compared with real time.\n"
                           "The physics is the same at any scale: always 1 ms steps.");
     ImGui::TextColored(kDim, "%d steps this frame, %.1f ms per frame", stepsLastFrame_, frameSeconds_ * 1000.0);
+    if (behind_) {
+        ImGui::TextColored(kProblem, "behind: simulating at most %.0f ms per frame (%.2f ms a step, %d threads)", 25.0,
+                           stepMilliseconds_, world_->physicsThreads());
+        ImGui::SetItemTooltip("The line is too busy to simulate in real time: it runs slower instead.\n"
+                              "The physics is the same, only slower than the clock on the wall.");
+    }
+    const auto& drawn = renderer_.stats();
+    ImGui::TextColored(kDim, "drawing: %zu boxes, %d draw calls, CPU %.2f ms, GPU %.2f ms", drawn.boxes,
+                       drawn.drawCalls, drawn.cpuMilliseconds, drawn.gpuMilliseconds);
+    ImGui::SetItemTooltip("CPU: handing the frame to OpenGL. GPU: drawing it (a timer query, a frame late).");
     ImGui::Text("%zu boxes", world_->itemCount());
     ImGui::SameLine();
     if (ImGui::SmallButton("Clear boxes")) {

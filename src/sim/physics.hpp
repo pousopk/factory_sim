@@ -4,6 +4,7 @@
 // clang-format off
 #include <Jolt/Jolt.h>
 #include <Jolt/Core/JobSystemSingleThreaded.h>
+#include <Jolt/Core/JobSystemThreadPool.h>
 #include <Jolt/Core/TempAllocator.h>
 #include <Jolt/Physics/Body/BodyInterface.h>
 #include <Jolt/Physics/Collision/ContactListener.h>
@@ -22,12 +23,17 @@ constexpr JPH::ObjectLayer kMoving = 1;
 constexpr JPH::uint kCount = 2;
 } // namespace layers
 
-// A Jolt physics world, set up for factory_sim: two layers, gravity along -Y,
-// and a single-threaded job system, so every run with the same inputs gives
-// exactly the same result (reproducible tests and measurements).
+// A Jolt physics world, set up for factory_sim: two layers, gravity along -Y.
+//
+// Jolt splits a step into jobs (finding collisions, solving each island of
+// touching bodies) and runs them on a job system: one thread, or a pool.
+// Its results don't depend on how many threads ran the jobs, only on the
+// calls made to it and their order, so every run with the same inputs gives
+// exactly the same result either way (a test checks it).
 class Physics {
 public:
-    Physics();
+    // `threads`: 1 for no extra threads; 0 to use the machine's cores (up to 8).
+    explicit Physics(int threads = 0);
     ~Physics();
     Physics(const Physics&) = delete;
     Physics& operator=(const Physics&) = delete;
@@ -50,7 +56,11 @@ private:
     std::unique_ptr<ObjectVsBroadPhaseFilter> objectVsBroadPhase_;
     std::unique_ptr<ObjectPairFilter> objectPairs_;
     std::unique_ptr<JPH::TempAllocatorImpl> tempAllocator_;
-    std::unique_ptr<JPH::JobSystemSingleThreaded> jobs_;
+    std::unique_ptr<JPH::JobSystem> jobs_;
+    int threads_ = 1;
+
+public:
+    int threads() const { return threads_; } // the threads that run its jobs, the caller's included
     std::unique_ptr<JPH::PhysicsSystem> system_;
 };
 

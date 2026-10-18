@@ -3,6 +3,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <optional>
+#include <string>
 #include <vector>
 
 // What to draw, worked out from the simulation: a list of coloured boxes.
@@ -96,6 +97,18 @@ std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& co
 // of `selected` are highlighted.
 std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds = 1.0,
                                 std::optional<Pick> selected = std::nullopt);
+
+// A device's name, to show over the 3D view at a point above it.
+struct Label {
+    glm::vec3 position;
+    std::string text;
+    Pick pick; // what it names
+};
+
+// A label for every named device in the world: conveyors (over the middle
+// of the belt), photocells, proximity switches, lasers, light curtains,
+// actuators, bins and cameras, each just above its own parts.
+std::vector<Label> sceneLabels(const World& world);
 
 // Where a ray (from `origin`, along the unit vector `direction`) first
 // enters a box: the distance along the ray, or nothing if it misses.

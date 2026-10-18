@@ -195,6 +195,9 @@ void App::drawMenuBar() {
         ImGui::MenuItem("PLC variables", nullptr, &showPlcVariables_);
         ImGui::MenuItem("Cameras", nullptr, &showCameras_);
         ImGui::MenuItem("Logic analyser", nullptr, &showAnalyser_);
+        ImGui::Separator();
+        ImGui::MenuItem("Names in 3D", nullptr, &showNames_);
+        ImGui::MenuItem("Shadows", nullptr, &renderer_.shadows);
         ImGui::EndMenu();
     }
     // Which file this is, on the right.

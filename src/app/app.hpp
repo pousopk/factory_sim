@@ -62,6 +62,7 @@ private:
     std::filesystem::path sceneFolder() const;                  // what relative paths in the scene start from
 
     void handleMouse(int width, int height);
+    void drawNames(int width, int height); // the devices' names, over the 3D view
     void handleKeys();
     void drawMainPanel();
     void drawLinePanel();
@@ -172,6 +173,9 @@ private:
     float timeScale_ = 1.0F;
     double frameSeconds_ = 0.0; // the last frame's real duration, for the panel
     int stepsLastFrame_ = 0;
+    double stepMilliseconds_ = 0.1;  // what a simulation step has cost lately (real time)
+    bool behind_ = false;            // the last frame ran out of time for the simulation
+    bool showNames_ = true;          // device names over the view (View menu)
     float scanMilliseconds_ = 10.0F; // a PLC reading the photocell this often (for the trigger table)
     int newSorterSensor_ = 0;        // the sensor and pusher chosen for the next sorter
     int newSorterPusher_ = 0;

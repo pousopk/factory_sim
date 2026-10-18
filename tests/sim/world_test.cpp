@@ -1,3 +1,4 @@
+#include "sim/scene.hpp"
 #include "sim/world.hpp"
 #include <cmath>
 #include <doctest/doctest.h>
@@ -192,4 +193,25 @@ TEST_CASE("An infeed waits for a gap: a stopped belt gets one box, not a pile") 
     world.conveyors()[0].spec.targetSpeed = 0.5F; // the belt starts: the next box comes once there's room
     world.run(2.0);
     CHECK(world.itemCount() >= 3);
+}
+
+TEST_CASE("The physics gives exactly the same result on one thread as on eight") {
+    // Jolt's results depend only on the calls made to it, in order, not on
+    // how many threads run its jobs. Exactly: every coordinate, to the bit.
+    auto one = buildWorld(sortingDemo(), makeProgram, 1);
+    auto eight = buildWorld(sortingDemo(), makeProgram, 8);
+    CHECK(one->physicsThreads() == 1);
+    CHECK(eight->physicsThreads() == 8);
+    one->run(10.0);
+    eight->run(10.0);
+    const auto a = one->items();
+    const auto b = eight->items();
+    REQUIRE(a.size() == b.size());
+    REQUIRE(a.size() > 5);
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        CHECK(a[i].id == b[i].id);
+        CHECK(a[i].position == b[i].position); // not Approx: the very same floats
+        CHECK(a[i].velocity == b[i].velocity);
+    }
+    CHECK(one->bins()[0].count == eight->bins()[0].count);
 }
