@@ -135,6 +135,11 @@ void App::drawMenuBar() {
             ImGui::SetItemTooltip("ladder_editor's conveyor program, run by soft_plc, on a line wired to its\n"
                                   "addresses. Press Start on the control panel; ladder_editor can go online\n"
                                   "with --connect=5020.");
+            if (ImGui::MenuItem("Conveyor with a drive (soft_plc)")) {
+                startNew(driveDemo(FACTORY_SIM_EXAMPLES_DIR "/drive.st"));
+            }
+            ImGui::SetItemTooltip("A belt driven over PROFIdrive telegram 1 by examples/drive.st:\n"
+                                  "press Start, turn the Speed potentiometer");
             if (ImGui::MenuItem("Tins and cameras")) {
                 startNew(tinDemo());
             }

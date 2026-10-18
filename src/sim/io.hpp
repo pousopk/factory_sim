@@ -35,7 +35,11 @@ std::string formatAddress(const IoAddress& address);
 
 class IoImage {
 public:
-    static constexpr std::size_t kBytes = 16; // per area, like soft_plc's default
+    // Per area. Bytes 0-7 hold bits (sensors, valves, buttons), 8 on words
+    // and double words (encoders, drives, analog values). A real S7-1200 has
+    // 1024; soft_plc on its own (soft_plc --s7) has 16, which the live S7
+    // link respects (Scene::s7Bytes).
+    static constexpr std::size_t kBytes = 64;
 
     bool bit(const IoAddress& address) const;
     void setBit(const IoAddress& address, bool value);

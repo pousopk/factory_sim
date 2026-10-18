@@ -54,6 +54,7 @@ struct Scene {
     // The control panel, and the control program.
     std::vector<ButtonSpec> buttons;
     std::vector<LampSpec> lamps;
+    std::vector<PotentiometerSpec> potentiometers;
     std::vector<SorterSpec> sorters;
     std::vector<CameraTriggerSpec> cameraTriggers;
     Control control = Control::Manual;
@@ -65,6 +66,7 @@ struct Scene {
     // A live PLC over S7: where it is (soft_plc --s7, or a real S7, rack 0 slot 1).
     std::string s7Host = "127.0.0.1";
     int s7Port = 102;
+    int s7Bytes = 16; // how many input and output bytes to exchange: soft_plc --s7 has 16
 
     bool operator==(const Scene&) const = default;
 };
@@ -114,8 +116,8 @@ Scene conveyorDemo(std::string program);
 
 // The first free address of a kind, as soft_plc writes it: the first input
 // or output bit not used by any device, button or lamp ("%IX0.3"), or the
-// first free double word for an encoder ("%ID8"). Bits are in bytes 0-7,
-// double words in bytes 8-15. Empty if none is left.
+// first free word or double word ("%IW12", "%ID8"). Bits are in bytes 0-7,
+// words and double words from byte 8. Empty if none is left.
 std::string freeAddress(const Scene& scene, IoAddress::Area area, IoAddress::Size size);
 
 // A sorter wired to an inspection photocell and a pusher on the same
@@ -159,6 +161,15 @@ void removePusher(Scene& scene, std::size_t index);
 void removeDiverter(Scene& scene, std::size_t index);
 void removeStopper(Scene& scene, std::size_t index);
 void removeBin(Scene& scene, std::size_t index);
+
+// Gives `conveyor` a drive on the bus, with the telegram's four words at the
+// next free addresses (two output words, two input words).
+void fitDrive(Scene& scene, std::size_t conveyor);
+
+// A conveyor with a drive, run by soft_plc running `program`: Start, Stop
+// and Acknowledge buttons, a speed potentiometer, and lamps for running and
+// fault. examples/drive.st is the program.
+Scene driveDemo(std::string program);
 
 // A camera over `conveyor`, a little past its middle, named K1, K2, ...,
 // with the next free trigger output and ready input. Returns its index.

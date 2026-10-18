@@ -122,7 +122,7 @@ Scene sortingDemo() {
 bool sameControl(const Scene& a, const Scene& b) {
     return a.control == b.control && a.sorters == b.sorters && a.cameraTriggers == b.cameraTriggers &&
            a.plcProgram == b.plcProgram && a.monitorPort == b.monitorPort && a.s7Host == b.s7Host &&
-           a.s7Port == b.s7Port;
+           a.s7Port == b.s7Port && a.s7Bytes == b.s7Bytes;
 }
 
 Scene conveyorDemo(std::string program) {
@@ -232,6 +232,15 @@ std::vector<IoAddress> usedAddresses(const Scene& scene) {
     for (const auto& c : scene.conveyors) {
         add(c.spec.runOutput);
         add(c.spec.encoderInput);
+        if (c.spec.drive.fitted) {
+            add(c.spec.drive.controlOutput);
+            add(c.spec.drive.setpointOutput);
+            add(c.spec.drive.statusInput);
+            add(c.spec.drive.actualInput);
+        }
+    }
+    for (const auto& p : scene.potentiometers) {
+        add(p.address);
     }
     for (const auto& p : scene.photocells) {
         add(p.input);
@@ -447,7 +456,7 @@ std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make) 
     for (const auto& camera : scene.cameras) {
         world->addCamera(camera); // (one on a missing conveyor sees nothing)
     }
-    world->setPanel(scene.buttons, scene.lamps);
+    world->setPanel(scene.buttons, scene.lamps, scene.potentiometers);
     world->setProgram(make(scene));
     return world;
 }
@@ -460,7 +469,7 @@ void applyLive(World& world, const Scene& scene) {
     world.setPhotocells(scene.photocells);
     world.setSpawners(scene.spawners);
     world.setStrokes(scene.pushers, scene.diverters, scene.stoppers);
-    world.setPanel(scene.buttons, scene.lamps);
+    world.setPanel(scene.buttons, scene.lamps, scene.potentiometers);
     world.setCameras(scene.cameras);
 }
 
@@ -600,6 +609,51 @@ void removeStopper(Scene& scene, std::size_t index) {
 }
 void removeBin(Scene& scene, std::size_t index) {
     eraseAt(scene.bins, index);
+}
+
+void fitDrive(Scene& scene, std::size_t conveyor) {
+    auto& drive = scene.conveyors.at(conveyor).spec.drive;
+    if (drive.fitted) {
+        return;
+    }
+    // One at a time: each takes its address before the next is looked for.
+    drive.fitted = true;
+    drive.controlOutput = freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Word);
+    drive.setpointOutput = freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Word);
+    drive.statusInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Word);
+    drive.actualInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Word);
+}
+
+Scene driveDemo(std::string program) {
+    Scene scene;
+    PlacedConveyor conveyor;
+    conveyor.spec.name = "C1";
+    conveyor.spec.length = 5.0F;
+    conveyor.spec.targetSpeed = 0.5F;
+    conveyor.spec.acceleration = 0.5F; // a gentle ramp, to watch
+    conveyor.spec.encoderInput = "%ID8";
+    // The telegram where a TIA project would often put it, after the encoder:
+    // STW1, NSOLL_A out; ZSW1, NIST_A in.
+    conveyor.spec.drive.fitted = true;
+    conveyor.spec.drive.referenceSpeed = 1.0F;
+    conveyor.spec.drive.controlOutput = "%QW12";
+    conveyor.spec.drive.setpointOutput = "%QW14";
+    conveyor.spec.drive.statusInput = "%IW12";
+    conveyor.spec.drive.actualInput = "%IW14";
+    scene.conveyors.push_back(conveyor);
+    SpawnerSpec spawner;
+    spawner.interval = 1.5;
+    scene.spawners.push_back(spawner);
+    scene.buttons = {
+        ButtonSpec{"Start", "%IX0.0", false, false},
+        ButtonSpec{"Stop", "%IX0.1", true, false}, // wired normally closed
+        ButtonSpec{"Acknowledge", "%IX0.2", false, false},
+    };
+    scene.potentiometers = {PotentiometerSpec{"Speed", "%IW16"}};
+    scene.lamps = {LampSpec{"Running", "%QX0.0"}, LampSpec{"Fault", "%QX0.1"}, LampSpec{"At speed", "%QX0.2"}};
+    scene.control = Control::SoftPlc;
+    scene.plcProgram = std::move(program);
+    return scene;
 }
 
 std::size_t addCamera(Scene& scene, std::size_t conveyor) {
@@ -750,6 +804,15 @@ std::string sceneToJson(const Scene& scene) {
                          {"guideRight", c.spec.guideRight},
                          {"runOutput", c.spec.runOutput},
                          {"encoderInput", c.spec.encoderInput},
+                         {"drive",
+                          {{"fitted", c.spec.drive.fitted},
+                           {"referenceSpeed", c.spec.drive.referenceSpeed},
+                           {"quickStop", c.spec.drive.quickStop},
+                           {"coast", c.spec.drive.coast},
+                           {"controlOutput", c.spec.drive.controlOutput},
+                           {"setpointOutput", c.spec.drive.setpointOutput},
+                           {"statusInput", c.spec.drive.statusInput},
+                           {"actualInput", c.spec.drive.actualInput}}},
                          {"encoder",
                           {{"pulsesPerRevolution", c.spec.encoder.pulsesPerRevolution},
                            {"rollerDiameter", c.spec.encoder.rollerDiameter}}}};
@@ -832,6 +895,10 @@ std::string sceneToJson(const Scene& scene) {
         data["buttons"].push_back(
             {{"name", b.name}, {"address", b.address}, {"normallyClosed", b.normallyClosed}, {"latching", b.latching}});
     }
+    data["potentiometers"] = json::array();
+    for (const auto& p : scene.potentiometers) {
+        data["potentiometers"].push_back({{"name", p.name}, {"address", p.address}});
+    }
     data["lamps"] = json::array();
     for (const auto& l : scene.lamps) {
         data["lamps"].push_back({{"name", l.name}, {"address", l.address}});
@@ -858,6 +925,7 @@ std::string sceneToJson(const Scene& scene) {
     data["monitorPort"] = scene.monitorPort;
     data["s7Host"] = scene.s7Host;
     data["s7Port"] = scene.s7Port;
+    data["s7Bytes"] = scene.s7Bytes;
     return data.dump(2) + "\n";
 }
 
@@ -884,6 +952,15 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             spec.guideRight = c.value("guideRight", false);
             spec.runOutput = c.value("runOutput", std::string());
             spec.encoderInput = c.value("encoderInput", std::string());
+            const auto drive = c.value("drive", json::object());
+            spec.drive.fitted = drive.value("fitted", false);
+            spec.drive.referenceSpeed = drive.value("referenceSpeed", spec.drive.referenceSpeed);
+            spec.drive.quickStop = drive.value("quickStop", spec.drive.quickStop);
+            spec.drive.coast = drive.value("coast", spec.drive.coast);
+            spec.drive.controlOutput = drive.value("controlOutput", std::string());
+            spec.drive.setpointOutput = drive.value("setpointOutput", std::string());
+            spec.drive.statusInput = drive.value("statusInput", std::string());
+            spec.drive.actualInput = drive.value("actualInput", std::string());
             const auto encoder = c.value("encoder", json::object());
             spec.encoder.pulsesPerRevolution = encoder.value("pulsesPerRevolution", spec.encoder.pulsesPerRevolution);
             spec.encoder.rollerDiameter = encoder.value("rollerDiameter", spec.encoder.rollerDiameter);
@@ -1020,6 +1097,12 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             b.latching = j.value("latching", b.latching);
             scene.buttons.push_back(b);
         }
+        for (const auto& j : data.value("potentiometers", json::array())) {
+            PotentiometerSpec p;
+            p.name = j.value("name", p.name);
+            p.address = j.value("address", p.address);
+            scene.potentiometers.push_back(p);
+        }
         for (const auto& j : data.value("lamps", json::array())) {
             LampSpec l;
             l.name = j.value("name", l.name);
@@ -1051,6 +1134,7 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
         scene.monitorPort = data.value("monitorPort", 0);
         scene.s7Host = data.value("s7Host", scene.s7Host);
         scene.s7Port = data.value("s7Port", scene.s7Port);
+        scene.s7Bytes = data.value("s7Bytes", scene.s7Bytes);
         return scene;
     } catch (const json::exception& error) {
         return tl::unexpected(std::string("the scene file isn't valid: ") + error.what());

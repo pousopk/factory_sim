@@ -586,7 +586,11 @@ void App::drawConveyorInspector(std::size_t index) {
     ImGui::SliderFloat("belt height", &spec.beltHeight, 0.3F, 1.5F, "%.2f m");
     ImGui::TextColored(kDim, "Changing the place or size restarts the run.");
 
-    ImGui::SeparatorText("Drive");
+    ImGui::SeparatorText("Speed");
+    if (spec.drive.fitted) {
+        ImGui::TextColored(kDim, "With a drive, the PLC sets the speed: the target speed is only\n"
+                                 "used without a control program, and the run output not at all.");
+    }
     ImGui::SetNextItemWidth(kFieldWidth);
     ImGui::SliderFloat("target speed", &spec.targetSpeed, 0.0F, 3.0F, "%.2f m/s");
     ImGui::SetNextItemWidth(kFieldWidth);
@@ -606,6 +610,17 @@ void App::drawConveyorInspector(std::size_t index) {
     ImGui::SetItemTooltip(
         "The motor runs while this output is on (only with a control program).\nEmpty: it always runs.");
     addressField("encoder count", spec.encoderInput, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
+
+    ImGui::SeparatorText("Drive on the bus");
+    if (ImGui::Checkbox("drive on the bus (PROFIdrive telegram 1)", &spec.drive.fitted) && spec.drive.fitted) {
+        spec.drive.fitted = false;
+        fitDrive(s, index); // with free addresses
+    }
+    if (spec.drive.fitted) {
+        drawDrive(index);
+    } else {
+        ImGui::TextColored(kDim, "Without one, the motor is on or off (run output) at the target speed.");
+    }
 
     ImGui::SeparatorText("Encoder");
     ImGui::SetNextItemWidth(kFieldWidth);
@@ -1054,6 +1069,15 @@ void App::drawIoTable() {
     for (const auto& c : s.conveyors) {
         add(c.spec.encoderInput, c.spec.name + " encoder count");
         add(c.spec.runOutput, c.spec.name + " motor");
+        if (c.spec.drive.fitted) {
+            add(c.spec.drive.controlOutput, c.spec.name + " drive STW1 (control word)");
+            add(c.spec.drive.setpointOutput, c.spec.name + " drive NSOLL_A (setpoint)");
+            add(c.spec.drive.statusInput, c.spec.name + " drive ZSW1 (status word)");
+            add(c.spec.drive.actualInput, c.spec.name + " drive NIST_A (actual speed)");
+        }
+    }
+    for (const auto& p : s.potentiometers) {
+        add(p.address, p.name + " potentiometer");
     }
     for (const auto& p : s.photocells) {
         add(p.input, p.name + (p.onlyNok ? " inspection (bad box)" : " photocell"));
@@ -1087,7 +1111,7 @@ void App::drawIoTable() {
     if (ImGui::BeginTable("io", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
         ImGui::TableSetupScrollFreeze(0, 1);
         ImGui::TableSetupColumn("address", ImGuiTableColumnFlags_WidthFixed, 70.0F);
-        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 80.0F);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 80.0F); // 16#047F fits
         ImGui::TableSetupColumn("what");
         ImGui::TableHeadersRow();
         for (const auto& row : rows) {
@@ -1101,6 +1125,11 @@ void App::drawIoTable() {
             } else if (address->size == IoAddress::Size::Bit) {
                 const bool on = world_->io().bit(*address);
                 ImGui::TextColored(on ? ImVec4(1.0F, 0.85F, 0.1F, 1.0F) : kDim, "%s", on ? "1" : "0");
+            } else if (address->size == IoAddress::Size::Word) {
+                // As TIA's watch table shows a word: hex, and as a signed INT.
+                const auto word = static_cast<std::uint16_t>(world_->io().value(*address));
+                ImGui::Text("16#%04X", word);
+                ImGui::SetItemTooltip("%d as an INT, %u as a WORD", static_cast<std::int16_t>(word), word);
             } else {
                 ImGui::Text("%u", world_->io().value(*address));
             }
@@ -1140,6 +1169,17 @@ void App::drawControlPanel() {
         }
         ImGui::PopID();
     }
+    for (std::size_t i = 0; i < world_->potentiometers().size(); ++i) {
+        ImGui::PushID(500 + static_cast<int>(i));
+        int value = world_->potentiometer(i);
+        ImGui::SetNextItemWidth(220.0F);
+        if (ImGui::SliderInt(world_->potentiometers()[i].name.c_str(), &value, 0, kAnalogFullScale, "%d")) {
+            world_->turn(i, value);
+        }
+        ImGui::SameLine();
+        ImGui::TextColored(kDim, "%.0f %%", 100.0 * value / kAnalogFullScale);
+        ImGui::PopID();
+    }
     if (!world_->lamps().empty()) {
         ImGui::Spacing();
     }
@@ -1153,7 +1193,7 @@ void App::drawControlPanel() {
         ImGui::TextUnformatted(world_->lamps()[i].name.c_str());
         ImGui::PopID();
     }
-    if (world_->buttons().empty() && world_->lamps().empty()) {
+    if (world_->buttons().empty() && world_->lamps().empty() && world_->potentiometers().empty()) {
         ImGui::TextColored(kDim, "No buttons or lamps yet.");
     }
 
@@ -1201,6 +1241,26 @@ void App::drawControlPanel() {
         if (removeLamp) {
             s.lamps.erase(s.lamps.begin() + static_cast<std::ptrdiff_t>(*removeLamp));
         }
+        std::optional<std::size_t> removePot;
+        for (std::size_t i = 0; i < s.potentiometers.size(); ++i) {
+            auto& p = s.potentiometers[i];
+            ImGui::PushID(4000 + static_cast<int>(i));
+            ImGui::SetNextItemWidth(90.0F);
+            ImGui::InputText("##name", &p.name);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70.0F);
+            ImGui::InputText("##address", &p.address);
+            ImGui::SameLine();
+            ImGui::TextColored(kDim, "potentiometer (input word)");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) {
+                removePot = i;
+            }
+            ImGui::PopID();
+        }
+        if (removePot) {
+            s.potentiometers.erase(s.potentiometers.begin() + static_cast<std::ptrdiff_t>(*removePot));
+        }
         if (ImGui::SmallButton("+ Button")) {
             s.buttons.push_back(ButtonSpec{fmt::format("S{}", s.buttons.size() + 1),
                                            freeAddress(s, IoAddress::Area::Input, IoAddress::Size::Bit), false, false});
@@ -1210,6 +1270,13 @@ void App::drawControlPanel() {
             s.lamps.push_back(LampSpec{fmt::format("H{}", s.lamps.size() + 1),
                                        freeAddress(s, IoAddress::Area::Output, IoAddress::Size::Bit)});
         }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("+ Potentiometer")) {
+            s.potentiometers.push_back(
+                PotentiometerSpec{fmt::format("R{}", s.potentiometers.size() + 1),
+                                  freeAddress(s, IoAddress::Area::Input, IoAddress::Size::Word)});
+        }
+        ImGui::SetItemTooltip("An analog input word, 0 to 27648, like a Siemens analog input module");
     }
     ImGui::End();
 }
@@ -1256,6 +1323,10 @@ void App::drawPlcStatus() {
         ImGui::InputInt("S7 port", &s.s7Port, 0);
         s.s7Port = std::clamp(s.s7Port, 1, 65535);
         ImGui::SetItemTooltip("102 for a real S7; soft_plc --s7=PORT for another (no rights needed above 1023)");
+        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SliderInt("bytes", &s.s7Bytes, 2, static_cast<int>(IoImage::kBytes));
+        ImGui::SetItemTooltip("How many input and output bytes to exchange each scan. soft_plc --s7 has 16;\n"
+                              "a real S7 has far more. Addresses past them don't reach the PLC.");
         if (const auto* link = dynamic_cast<const S7Link*>(world_->program())) {
             const auto status = link->status();
             ImGui::TextColored(status.connected ? ImVec4(0.45F, 0.85F, 0.50F, 1.0F) : kProblem, "%s",

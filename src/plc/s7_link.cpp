@@ -1,4 +1,5 @@
 #include "plc/s7_link.hpp"
+#include <algorithm>
 #include <fmt/format.h>
 #include <snap7.h>
 
@@ -15,7 +16,8 @@ constexpr int kSlot = 1; // a soft_plc, or an S7-300/400's CPU; an S7-1200/1500 
 
 } // namespace
 
-S7Link::S7Link(std::string host, std::uint16_t port) : host_(std::move(host)), port_(port) {
+S7Link::S7Link(std::string host, std::uint16_t port, std::size_t bytes)
+    : host_(std::move(host)), port_(port), bytes_(std::min(bytes, IoImage::kBytes)) {
     client_ = static_cast<std::uintptr_t>(Cli_Create());
 }
 
@@ -62,12 +64,12 @@ void S7Link::scan(IoImage& io, double /*time*/) {
     }
     const auto start = std::chrono::steady_clock::now();
     auto client = handle(client_);
-    if (const int code = Cli_EBWrite(client, 0, static_cast<int>(IoImage::kBytes), io.inputs().data()); code != 0) {
+    if (const int code = Cli_EBWrite(client, 0, static_cast<int>(bytes_), io.inputs().data()); code != 0) {
         fail(code);
         io.outputs().fill(0);
         return;
     }
-    if (const int code = Cli_ABRead(client, 0, static_cast<int>(IoImage::kBytes), io.outputs().data()); code != 0) {
+    if (const int code = Cli_ABRead(client, 0, static_cast<int>(bytes_), io.outputs().data()); code != 0) {
         fail(code);
         io.outputs().fill(0);
         return;

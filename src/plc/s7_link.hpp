@@ -20,7 +20,9 @@ namespace fsim {
 
 class S7Link final : public ControlProgram {
 public:
-    S7Link(std::string host, std::uint16_t port);
+    // Exchanges the first `bytes` of each area (soft_plc on its own has 16;
+    // a real S7 has far more).
+    S7Link(std::string host, std::uint16_t port, std::size_t bytes = 16);
     ~S7Link() override;
     S7Link(const S7Link&) = delete;
     S7Link& operator=(const S7Link&) = delete;
@@ -42,6 +44,7 @@ private:
 
     std::string host_;
     std::uint16_t port_;
+    std::size_t bytes_;
     std::uintptr_t client_ = 0; // Snap7's client handle (kept out of this header)
     std::chrono::steady_clock::time_point lastAttempt_{};
     Status status_;

@@ -4,6 +4,7 @@
 #include "analysis/analysis.hpp"
 #include "app/app.hpp"
 #include <algorithm>
+#include <deque>
 #include <fmt/format.h>
 #include <fstream>
 #include <imgui.h>
@@ -138,25 +139,53 @@ void App::drawTimelines() {
         ImPlot::EndPlot();
     }
 
-    // The belts' speeds, sampled every scan: ramps up and down, stops.
+    // The belts' speeds, sampled every scan: ramps up and down, stops; and
+    // what their drives were asked for.
     if (ImPlot::BeginPlot("##speeds", ImVec2(-1, speedHeight - 4.0F), ImPlotFlags_NoMenus)) {
         timeAxis(true);
         ImPlot::SetupAxis(ImAxis_Y1, "m/s");
-        float top = 0.1F;
-        for (const auto& conveyor : world_->conveyors()) {
-            top = std::max(top, conveyor.spec.targetSpeed);
-        }
-        ImPlot::SetupAxisLimits(ImAxis_Y1, -0.05, top * 1.15, ImPlotCond_Always);
-        for (const auto& conveyor : world_->conveyors()) {
-            std::vector<double> xs;
-            std::vector<double> ys;
-            for (const auto& [time, speed] : conveyor.speedSamples) {
+        // The visible samples: each belt's speed, and for a belt with a
+        // drive, the speed its PLC asked for (NSOLL_A, in m/s).
+        const auto visible = [&](const std::deque<std::pair<double, float>>& samples, std::vector<double>& xs,
+                                 std::vector<double>& ys) {
+            for (const auto& [time, value] : samples) {
                 if (time >= viewFrom_ - 0.01 && time <= viewTo_ + 0.01) {
                     xs.push_back(time);
-                    ys.push_back(speed);
+                    ys.push_back(value);
                 }
             }
-            ImPlot::PlotLine(conveyor.spec.name.c_str(), xs.data(), ys.data(), static_cast<int>(xs.size()));
+        };
+        struct Line {
+            std::string name;
+            std::vector<double> xs;
+            std::vector<double> ys;
+            bool setpoint = false;
+        };
+        std::vector<Line> lines;
+        double top = 0.1;
+        double bottom = 0.0;
+        for (const auto& conveyor : world_->conveyors()) {
+            lines.push_back(Line{conveyor.spec.name, {}, {}, false});
+            visible(conveyor.speedSamples, lines.back().xs, lines.back().ys);
+            if (conveyor.spec.drive.fitted) {
+                lines.push_back(Line{conveyor.spec.name + " setpoint", {}, {}, true});
+                visible(conveyor.setpointSamples, lines.back().xs, lines.back().ys);
+            }
+            top = std::max(top, static_cast<double>(conveyor.spec.targetSpeed));
+        }
+        for (const auto& line : lines) {
+            for (const double y : line.ys) {
+                top = std::max(top, y);
+                bottom = std::min(bottom, y);
+            }
+        }
+        ImPlot::SetupAxisLimits(ImAxis_Y1, bottom * 1.15 - 0.05, top * 1.15, ImPlotCond_Always);
+        for (const auto& line : lines) {
+            // A setpoint thin and faint, under the speed that follows it.
+            const ImPlotSpec style = line.setpoint ? ImPlotSpec(ImPlotProp_LineWeight, 1.0F, ImPlotProp_FillAlpha, 0.5F)
+                                                   : ImPlotSpec(ImPlotProp_LineWeight, 2.0F);
+            ImPlot::PlotLine(line.name.c_str(), line.xs.data(), line.ys.data(), static_cast<int>(line.xs.size()),
+                             style);
         }
         ImPlot::EndPlot();
     }

@@ -198,3 +198,75 @@ TEST_CASE("The tin line's triggering in ST, run by soft_plc, triggers the camera
     // And the gap study, run with the ST program, finds the same answer.
     CHECK(minimumGap(sweepGaps(st, 0.06, 0.12, 0.005, make)) == minimumGap(sweepGaps(builtIn, 0.06, 0.12, 0.005)));
 }
+
+TEST_CASE("drive.st drives the belt through telegram 1: start, speed from the potentiometer, fault, acknowledge") {
+    auto scene = driveDemo("drive.st");
+    scene.spawners.clear();
+    const ProgramMaker make = [](const Scene& s) {
+        auto made = makeAnyProgram(s, FACTORY_SIM_SOURCE_DIR "/examples");
+        REQUIRE_MESSAGE(made.program != nullptr, made.error);
+        return std::move(made.program);
+    };
+    auto world = buildWorld(scene, make);
+    const auto lamp = [&](const char* name) {
+        for (std::size_t i = 0; i < world->lamps().size(); ++i) {
+            if (world->lamps()[i].name == name) {
+                return world->lit(i);
+            }
+        }
+        FAIL("no lamp " << name);
+        return false;
+    };
+    const auto press = [&](std::size_t button) {
+        world->press(button, true);
+        world->run(0.05);
+        world->press(button, false);
+    };
+    world->turn(0, kAnalogFullScale / 2); // the Speed potentiometer at half: 50 %
+    world->run(0.5);
+    CHECK(world->conveyors()[0].speed == 0.0F); // not started
+    press(0);                                   // Start
+    world->run(2.0);
+    CHECK(world->conveyors()[0].speed == doctest::Approx(0.5).epsilon(0.01)); // 50 % of 1 m/s
+    CHECK(lamp("Running"));
+    CHECK(lamp("At speed"));
+    world->turn(0, kAnalogFullScale); // full speed: it ramps up again
+    world->run(0.3);
+    CHECK_FALSE(lamp("At speed"));
+    world->tripDrive(0, "F30005: overload");
+    world->run(0.1);
+    CHECK(lamp("Fault"));
+    CHECK_FALSE(lamp("Running"));
+    world->run(1.0);
+    CHECK(world->conveyors()[0].speed == 0.0F); // coasted to a stop
+    press(0);                                   // Start does nothing while faulted
+    world->run(0.5);
+    CHECK(world->conveyors()[0].speed == 0.0F);
+    press(2); // Acknowledge
+    world->run(0.1);
+    CHECK_FALSE(lamp("Fault"));
+    press(0); // and Start again
+    world->run(2.5);
+    CHECK(world->conveyors()[0].speed == doctest::Approx(1.0).epsilon(0.01));
+    press(1); // Stop (normally closed: pressing opens it)
+    world->run(2.5);
+    CHECK(world->conveyors()[0].speed == 0.0F); // OFF1: down the ramp
+    CHECK_FALSE(lamp("Running"));
+}
+
+TEST_CASE("drive.st starts the drive with Start held from power-up: 16#047E first, then 16#047F") {
+    auto scene = driveDemo("drive.st");
+    scene.spawners.clear();
+    scene.buttons[0].latching = true;
+    const ProgramMaker make = [](const Scene& s) {
+        auto made = makeAnyProgram(s, FACTORY_SIM_SOURCE_DIR "/examples");
+        REQUIRE_MESSAGE(made.program != nullptr, made.error);
+        return std::move(made.program);
+    };
+    auto world = buildWorld(scene, make);
+    world->press(0, true); // held before the first scan
+    world->turn(0, kAnalogFullScale);
+    world->run(3.0);
+    CHECK(world->conveyors()[0].drive.state() == Drive::State::OperationEnabled);
+    CHECK(world->conveyors()[0].speed == doctest::Approx(1.0).epsilon(0.01));
+}

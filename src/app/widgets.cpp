@@ -30,14 +30,17 @@ void addressField(const char* label, std::string& text, IoAddress::Area area, Io
         ImGui::PushStyleColor(ImGuiCol_Text, kProblem);
     }
     ImGui::SetNextItemWidth(kFieldWidth);
-    ImGui::InputTextWithHint(
-        label, area == IoAddress::Area::Input ? (size == IoAddress::Size::Bit ? "%IX0.0" : "%ID8") : "%QX0.0", &text);
+    const bool input = area == IoAddress::Area::Input;
+    const char* hint = size == IoAddress::Size::Bit    ? (input ? "%IX0.0" : "%QX0.0")
+                       : size == IoAddress::Size::Word ? (input ? "%IW12" : "%QW12")
+                                                       : (input ? "%ID8" : "%QD8");
+    ImGui::InputTextWithHint(label, hint, &text);
     if (!ok) {
         ImGui::PopStyleColor();
-        ImGui::SetItemTooltip("Not a valid %s here",
-                              area == IoAddress::Area::Input
-                                  ? (size == IoAddress::Size::Bit ? "input bit" : "input double word")
-                                  : "output bit");
+        const char* kind = size == IoAddress::Size::Bit    ? "bit"
+                           : size == IoAddress::Size::Word ? "word"
+                                                           : "double word";
+        ImGui::SetItemTooltip("Not a valid %s %s here", input ? "input" : "output", kind);
     }
 }
 

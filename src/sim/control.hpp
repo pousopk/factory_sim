@@ -28,6 +28,16 @@ struct ButtonSpec {
     bool operator==(const ButtonSpec&) const = default;
 };
 
+// A potentiometer on the panel: an analog input word, 0 to 27648 as a
+// Siemens analog input module gives 0 to 10 V (the nominal range).
+struct PotentiometerSpec {
+    std::string name = "Speed";
+    std::string address = "%IW8";
+
+    bool operator==(const PotentiometerSpec&) const = default;
+};
+constexpr int kAnalogFullScale = 27648;
+
 struct LampSpec {
     std::string name = "Running";
     std::string address = "%QX0.0";

@@ -28,6 +28,10 @@ struct Conveyor {
     Signal motor;                    // the same, as a signal with the times it changed
     // The belt's speed, sampled every scan (for the logic analyser): time and m/s.
     std::deque<std::pair<double, float>> speedSamples;
+    // Its drive, if it has one (spec.drive.fitted), and the speed the PLC asked
+    // it for, sampled every scan like the speed (m/s).
+    Drive drive;
+    std::deque<std::pair<double, float>> setpointSamples;
     static constexpr std::size_t kSpeedSamples = 12000; // two minutes of scans
 
     // The encoder's count: whole pulses since the start (negative if the belt ran backwards).
@@ -163,7 +167,13 @@ public:
     void setProgram(std::unique_ptr<ControlProgram> program) { program_ = std::move(program); }
     ControlProgram* program() { return program_.get(); }
     // The control panel: its buttons (pressed or not) and lamps.
-    void setPanel(const std::vector<ButtonSpec>& buttons, const std::vector<LampSpec>& lamps);
+    void setPanel(const std::vector<ButtonSpec>& buttons, const std::vector<LampSpec>& lamps,
+                  const std::vector<PotentiometerSpec>& potentiometers = {});
+    const std::vector<PotentiometerSpec>& potentiometers() const { return potentiometers_; }
+    int potentiometer(std::size_t index) const { return index < turned_.size() ? turned_[index] : 0; }
+    void turn(std::size_t potentiometer, int value); // 0 to kAnalogFullScale
+    // A drive fault, as if the drive had raised it.
+    void tripDrive(std::size_t conveyor, std::string cause);
     const std::vector<ButtonSpec>& buttons() const { return buttons_; }
     const std::vector<LampSpec>& lamps() const { return lamps_; }
     bool pressed(std::size_t button) const { return button < pressed_.size() && pressed_[button]; }
@@ -222,6 +232,7 @@ private:
     void updateActuators(double stepStart, double stepEnd);
     void updateBins();
     void updateCameras(double stepEnd);
+    static void recordSetpoint(Conveyor& conveyor, double time);
     void cameraTrigger(Camera& camera, double time);
     void scan(double time);
     JPH::BodyID addKinematic(const Pose& pose, float friction);
@@ -245,6 +256,8 @@ private:
     std::vector<ButtonSpec> buttons_;
     std::vector<LampSpec> lamps_;
     std::vector<bool> pressed_;
+    std::vector<PotentiometerSpec> potentiometers_;
+    std::vector<int> turned_; // each potentiometer's value
     std::vector<Signal> buttonSignals_;
     std::vector<Signal> lampSignals_;
     ItemId nextItemId_ = 1;

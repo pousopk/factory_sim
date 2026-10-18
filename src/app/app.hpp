@@ -67,6 +67,7 @@ private:
     void drawLinePanel();
     void drawInspector();
     void drawConveyorInspector(std::size_t index);
+    void drawDrive(std::size_t conveyor); // its drive's telegram, state and settings (drives.cpp)
     void drawPhotocellInspector(std::size_t index);
     void drawSpawnerInspector(std::size_t index);
     void drawPusherInspector(std::size_t index);

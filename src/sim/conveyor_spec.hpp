@@ -1,4 +1,5 @@
 #pragma once
+#include "sim/drive.hpp"
 #include "sim/sensors.hpp"
 #include <glm/glm.hpp>
 #include <string>
@@ -27,6 +28,10 @@ struct ConveyorSpec {
     // input double word its encoder's count is written to (empty: none).
     std::string runOutput;
     std::string encoderInput;
+    // A drive on the bus instead (PROFIdrive telegram 1): the PLC sets the
+    // speed, not just on and off. With one, `targetSpeed` is only used
+    // without a control program.
+    DriveSpec drive;
 
     bool operator==(const ConveyorSpec&) const = default;
 };

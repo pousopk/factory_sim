@@ -405,9 +405,12 @@ void World::step() {
     updateBins();
 }
 
-void World::setPanel(const std::vector<ButtonSpec>& buttons, const std::vector<LampSpec>& lamps) {
+void World::setPanel(const std::vector<ButtonSpec>& buttons, const std::vector<LampSpec>& lamps,
+                     const std::vector<PotentiometerSpec>& potentiometers) {
     buttons_ = buttons;
     lamps_ = lamps;
+    potentiometers_ = potentiometers;
+    turned_.resize(potentiometers.size(), 0);
     pressed_.resize(buttons.size(), false);
     buttonSignals_.resize(buttons.size());
     lampSignals_.resize(lamps.size());
@@ -417,6 +420,18 @@ void World::press(std::size_t button, bool down) {
     if (button < pressed_.size()) {
         pressed_[button] = down;
         buttonSignals_[button].set(time(), down);
+    }
+}
+
+void World::turn(std::size_t potentiometer, int value) {
+    if (potentiometer < turned_.size()) {
+        turned_[potentiometer] = std::clamp(value, 0, kAnalogFullScale);
+    }
+}
+
+void World::tripDrive(std::size_t conveyor, std::string cause) {
+    if (conveyor < conveyors_.size() && conveyors_[conveyor].spec.drive.fitted) {
+        conveyors_[conveyor].drive.trip(std::move(cause));
     }
 }
 
@@ -455,6 +470,16 @@ void World::scan(double time) {
     for (const auto& camera : cameras_) {
         write(camera.spec.readyInput, camera.timing.busyAt(time) ? 0U : 1U);
     }
+    for (const auto& conveyor : conveyors_) {
+        if (conveyor.spec.drive.fitted) {
+            write(conveyor.spec.drive.statusInput, conveyor.drive.statusWord());
+            // A negative speed as the 16-bit two's complement the PLC reads as an INT.
+            write(conveyor.spec.drive.actualInput, static_cast<std::uint16_t>(conveyor.drive.actualSpeed()));
+        }
+    }
+    for (std::size_t i = 0; i < potentiometers_.size(); ++i) {
+        write(potentiometers_[i].address, static_cast<std::uint32_t>(turned_[i]));
+    }
     for (std::size_t i = 0; i < buttons_.size(); ++i) {
         // A normally closed contact is closed (TRUE) while the button is NOT pressed.
         write(buttons_[i].address, pressed(i) != buttons_[i].normallyClosed ? 1U : 0U);
@@ -470,8 +495,23 @@ void World::scan(double time) {
 
     if (!program_) {
         for (auto& conveyor : conveyors_) {
-            conveyor.running = true;
-            conveyor.motor.set(time, true);
+            if (conveyor.spec.drive.fitted) {
+                // Nobody to send the telegram: the drive is run as if a PLC
+                // said "run at the target speed", the way a belt without a
+                // program always runs.
+                const auto setpoint = static_cast<std::int16_t>(std::lround(
+                    std::clamp(conveyor.spec.targetSpeed / conveyor.spec.drive.referenceSpeed, -1.99F, 1.99F) *
+                    kFullScale));
+                if (conveyor.drive.state() == Drive::State::SwitchingOnInhibited) {
+                    conveyor.drive.command(stw1::kReady, setpoint);
+                }
+                conveyor.drive.command(stw1::kRun, setpoint);
+                conveyor.running = conveyor.drive.state() == Drive::State::OperationEnabled;
+            } else {
+                conveyor.running = true;
+            }
+            conveyor.motor.set(time, conveyor.running);
+            recordSetpoint(conveyor, time);
         }
         for (auto& lamp : lampSignals_) {
             lamp.set(time, false);
@@ -498,8 +538,23 @@ void World::scan(double time) {
     std::for_each(diverters_.begin(), diverters_.end(), valve);
     std::for_each(stoppers_.begin(), stoppers_.end(), valve);
     for (auto& conveyor : conveyors_) {
-        conveyor.running = read(conveyor.spec.runOutput).value_or(true); // no run output: it always runs
+        if (conveyor.spec.drive.fitted) {
+            // The telegram: two output words, read as the PLC wrote them.
+            const auto word = [&](const std::string& text) -> std::uint16_t {
+                const auto address = parseAddress(text);
+                if (!address || address->area != IoAddress::Area::Output || address->size != IoAddress::Size::Word) {
+                    return 0;
+                }
+                return static_cast<std::uint16_t>(io_.value(*address));
+            };
+            conveyor.drive.command(word(conveyor.spec.drive.controlOutput),
+                                   static_cast<std::int16_t>(word(conveyor.spec.drive.setpointOutput)));
+            conveyor.running = conveyor.drive.state() == Drive::State::OperationEnabled;
+        } else {
+            conveyor.running = read(conveyor.spec.runOutput).value_or(true); // no run output: it always runs
+        }
         conveyor.motor.set(time, conveyor.running);
+        recordSetpoint(conveyor, time);
     }
     for (std::size_t i = 0; i < lamps_.size(); ++i) {
         lampSignals_[i].set(time, lit(i));
@@ -513,6 +568,21 @@ void World::scan(double time) {
                 cameraTrigger(camera, time);
             }
         }
+    }
+}
+
+// The speed a drive was asked for, in m/s, for the analyser's speed plot.
+void World::recordSetpoint(Conveyor& conveyor, double time) {
+    if (!conveyor.spec.drive.fitted) {
+        return;
+    }
+    const bool enabled = (conveyor.drive.controlWord() & stw1::kSetpointEnable) != 0;
+    const float setpoint =
+        enabled ? static_cast<float>(conveyor.drive.setpoint()) / kFullScale * conveyor.spec.drive.referenceSpeed
+                : 0.0F;
+    conveyor.setpointSamples.emplace_back(time, setpoint);
+    if (conveyor.setpointSamples.size() > Conveyor::kSpeedSamples) {
+        conveyor.setpointSamples.pop_front();
     }
 }
 
@@ -664,9 +734,20 @@ void World::updateBins() {
     }
 }
 
-// Each belt ramps its speed towards the target, like a VFD with a ramp time.
+// Each belt ramps its speed towards the target, like a VFD with a ramp time;
+// a belt with a drive on the bus moves as its drive turns it.
 void World::updateConveyors() {
     for (auto& conveyor : conveyors_) {
+        if (conveyor.spec.drive.fitted) {
+            const auto& drive = conveyor.spec.drive;
+            const double reference = std::max(drive.referenceSpeed, 0.01F);
+            conveyor.drive.update(kStep, conveyor.spec.acceleration / reference, drive.quickStop / reference,
+                                  drive.coast / reference);
+            conveyor.speed = static_cast<float>(conveyor.drive.speed() * reference);
+            conveyor.travelledBefore = conveyor.travelled;
+            conveyor.travelled += conveyor.speed * kStep;
+            continue;
+        }
         const float maxChange = conveyor.spec.acceleration * static_cast<float>(kStep);
         const float target = conveyor.running ? conveyor.spec.targetSpeed : 0.0F; // stopped: ramps down
         const float difference = target - conveyor.speed;

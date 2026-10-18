@@ -29,7 +29,8 @@ TEST_CASE("Words and double words are big-endian, as on an S7") {
     io.setBit(*parseAddress("%IX0.3"), true);
     CHECK(io.inputs()[0] == 0x08);
     CHECK(io.value(*parseAddress("%IX0.3")) == 1U);
-    CHECK_FALSE(IoImage::fits(*parseAddress("%ID14"))); // bytes 14-17: past the end
+    CHECK(IoImage::fits(*parseAddress("%ID60")));
+    CHECK_FALSE(IoImage::fits(*parseAddress("%ID62"))); // bytes 62-65: past the end of 64
 }
 
 TEST_CASE("New devices get the next free addresses") {
@@ -40,7 +41,13 @@ TEST_CASE("New devices get the next free addresses") {
     CHECK(scene.pushers[pusher].retractedInput == "%IX0.2");
     CHECK(scene.photocells[addPhotocell(scene, 0)].input == "%IX0.3");
     CHECK(scene.conveyors[addConveyor(scene)].spec.encoderInput == "%ID12");
-    CHECK(scene.conveyors[addConveyor(scene)].spec.encoderInput.empty()); // only two double words fit
+    CHECK(scene.conveyors[addConveyor(scene)].spec.encoderInput == "%ID16");
+    // Bytes 8-63 hold 14 double words: the 15th encoder gets none.
+    for (int i = 3; i < 14; ++i) {
+        addConveyor(scene);
+    }
+    CHECK(scene.conveyors.back().spec.encoderInput == "%ID60");
+    CHECK(scene.conveyors[addConveyor(scene)].spec.encoderInput.empty());
 }
 
 TEST_CASE("A scan reads the devices into the image; a normally closed button reads TRUE until pressed") {
