@@ -29,7 +29,8 @@ struct Pick {
         Camera,
         Proximity,
         Laser,
-        LightCurtain
+        LightCurtain,
+        Item // a box or tin on the line: its index is the item's id
     };
     Kind kind = Kind::None;
     std::size_t index = 0;
@@ -51,6 +52,7 @@ struct DrawBox {
     bool unlit = false;     // a light source (a beam, an LED): its colour as it is, no shading
     Pick pick{};            // what it belongs to (None: can't be selected)
     bool highlight = false; // part of the selection
+    bool hovered = false;   // under the mouse
     bool round = false;     // a cylinder (a tin): size.x is its diameter, size.y its height
 };
 
@@ -96,7 +98,8 @@ std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& co
 // each camera's last picture, where the item was in it). The parts
 // of `selected` are highlighted.
 std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds = 1.0,
-                                std::optional<Pick> selected = std::nullopt);
+                                std::optional<Pick> selected = std::nullopt,
+                                std::optional<Pick> hovered = std::nullopt);
 
 // A device's name, to show over the 3D view at a point above it.
 struct Label {

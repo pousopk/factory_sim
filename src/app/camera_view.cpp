@@ -29,7 +29,8 @@ std::vector<std::vector<DrawBox>> App::exposureMoments(const Camera& camera, dou
     for (const auto& box : sceneBoxes(*world_)) {
         // Not the items (added below), ghosts and see-through helpers (a
         // field of view on the belt, a sensor's reach), or the cameras.
-        if (box.pick.kind != Pick::Kind::None && box.pick.kind != Pick::Kind::Camera && box.alpha >= 1.0F) {
+        if (box.pick.kind != Pick::Kind::None && box.pick.kind != Pick::Kind::Item &&
+            box.pick.kind != Pick::Kind::Camera && box.alpha >= 1.0F) {
             fixed.push_back(box);
         }
     }

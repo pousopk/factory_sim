@@ -187,6 +187,7 @@ if(FACTORY_SIM_BUILD_APP)
     ${FACTORY_SIM_FONT_SOURCE}
     src/app/theme.cpp
     src/app/layout.cpp
+    src/app/tree.cpp
     src/app/main.cpp
     src/app/app.cpp
     src/app/analyser.cpp

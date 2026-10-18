@@ -128,19 +128,23 @@ void App::turnSelection(float quarterTurns) {
 // items over a preview of the layout being dragged (a world built from the
 // scene as it is now, which nothing runs).
 std::vector<DrawBox> App::boxesToDraw() {
-    const auto highlight = hovered_ ? hovered_ : selected_;
+    const auto highlight = placing_ ? hovered_ : selected_;
     if (!drag_) {
-        return sceneBoxes(*world_, 1.0, highlight);
+        return sceneBoxes(*world_, 1.0, highlight, placing_ ? std::nullopt : hoverPick_);
     }
     if (!preview_ || previewed_ != scene()) {
         preview_ = buildWorld(scene(), [](const Scene&) { return nullptr; }, 1);
         previewed_ = scene();
     }
+    // The layout from the preview; the items (and ghosts) from the running world.
+    const auto isItem = [](const DrawBox& b) {
+        return b.pick.kind == Pick::Kind::None || b.pick.kind == Pick::Kind::Item;
+    };
     auto boxes = sceneBoxes(*preview_, 1.0, highlight);
-    std::erase_if(boxes, [](const DrawBox& b) { return b.pick.kind == Pick::Kind::None; }); // the preview has no items
+    std::erase_if(boxes, isItem);
     for (const auto& box : sceneBoxes(*world_)) {
-        if (box.pick.kind == Pick::Kind::None) {
-            boxes.push_back(box); // the items, where they are
+        if (isItem(box)) {
+            boxes.push_back(box);
         }
     }
     return boxes;

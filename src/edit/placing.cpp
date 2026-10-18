@@ -105,6 +105,7 @@ template <class S, class F> bool withPlace(S& scene, Pick pick, F f) {
         f(scene.spawners[pick.index].conveyor, scene.spawners[pick.index].offset);
         return true;
     case Pick::Kind::Conveyor:
+    case Pick::Kind::Item:
     case Pick::Kind::None:
         break;
     }
@@ -187,6 +188,7 @@ std::optional<Pick> addAt(Scene& scene, Pick::Kind kind, std::size_t conveyor, f
         added = Pick{kind, addLightCurtain(scene, conveyor)};
         break;
     case Pick::Kind::Conveyor:
+    case Pick::Kind::Item:
     case Pick::Kind::None:
         return std::nullopt;
     }
@@ -224,6 +226,7 @@ std::optional<Clip> copyOf(const Scene& scene, Pick pick) {
         return from(scene.lasers);
     case Pick::Kind::LightCurtain:
         return from(scene.curtains);
+    case Pick::Kind::Item: // items aren't part of the scene: nothing to copy
     case Pick::Kind::None:
         break;
     }

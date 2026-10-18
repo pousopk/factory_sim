@@ -210,6 +210,7 @@ void App::handleMouse(int width, int height) {
     const auto& io = ImGui::GetIO();
     if (io.WantCaptureMouse) {
         hovered_.reset();
+        hoverPick_.reset();
         return;
     }
     const bool clicked =
@@ -217,9 +218,20 @@ void App::handleMouse(int width, int height) {
     if (const auto ray = mouseRay(width, height)) {
         editInView(*ray, ImGui::IsMouseClicked(ImGuiMouseButton_Left), ImGui::IsMouseDown(ImGuiMouseButton_Left),
                    clicked);
-        // A click (a press and release that didn't move far) selects what's under the mouse.
-        if (clicked && !placing_ && !drag_) {
-            selected_ = pickAt(sceneBoxes(*world_), ray->origin, ray->direction);
+        // What's under the mouse: lighter, with a tooltip saying what it is.
+        // A click (a press and release that didn't move far) selects it.
+        hoverPick_.reset();
+        if (!placing_ && !drag_) {
+            hoverPick_ = pickAt(sceneBoxes(*world_), ray->origin, ray->direction);
+            if (hoverPick_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
+                !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
+                if (const auto text = describe(*hoverPick_); !text.empty()) {
+                    ImGui::SetTooltip("%s", text.c_str());
+                }
+            }
+            if (clicked) {
+                selected_ = hoverPick_;
+            }
         }
     }
     const auto windowHeight = static_cast<float>(height);
@@ -319,6 +331,9 @@ void App::deleteSelected() {
     case Pick::Kind::LightCurtain:
         removeLightCurtain(scene(), selected_->index);
         break;
+    case Pick::Kind::Item:
+        world_->removeItem(selected_->index); // not the scene's: just this one off the line
+        break;
     case Pick::Kind::None:
         break;
     }
@@ -366,6 +381,14 @@ void App::keepSelectionValid() {
     case Pick::Kind::LightCurtain:
         count = s.curtains.size();
         break;
+    case Pick::Kind::Item: {
+        // An item lives in the world, not the scene: still there?
+        const auto items = world_->items();
+        if (std::none_of(items.begin(), items.end(), [&](const ItemView& i) { return i.id == selected_->index; })) {
+            selected_.reset();
+        }
+        return;
+    }
     case Pick::Kind::None:
         break;
     }
@@ -385,92 +408,7 @@ void App::drawLinePanel() {
     ImGui::SetNextWindowSize(ImVec2(340, 330), ImGuiCond_FirstUseEver);
     ImGui::Begin("Line", &showLine_);
     auto& s = scene();
-    const auto selectable = [&](const std::string& label, Pick pick) {
-        if (ImGui::Selectable(label.c_str(), selected_ == pick)) {
-            selected_ = pick;
-        }
-    };
-    ImGui::SeparatorText("Conveyors");
-    for (std::size_t i = 0; i < s.conveyors.size(); ++i) {
-        const auto& c = s.conveyors[i];
-        auto detail = c.follows && *c.follows < s.conveyors.size()
-                          ? fmt::format("  after {}, {}", s.conveyors[*c.follows].spec.name, turnName(c.turn))
-                      : c.joins && *c.joins < s.conveyors.size()
-                          ? fmt::format("  joins {}", s.conveyors[*c.joins].spec.name)
-                          : std::string("  on its own");
-        if (c.spec.zones > 1) {
-            detail += fmt::format(", {} zones", c.spec.zones);
-        }
-        if (c.spec.carriage != Carriage::None) {
-            detail += c.spec.carriage == Carriage::Turntable ? ", turntable" : ", lift";
-        }
-        selectable(fmt::format("{}  {:.2f} m{}###c{}", c.spec.name, c.spec.length, detail, i),
-                   Pick{Pick::Kind::Conveyor, i});
-    }
-    const auto conveyorName = [&](std::size_t c) {
-        return c < s.conveyors.size() ? s.conveyors[c].spec.name : std::string("?");
-    };
-    ImGui::SeparatorText("Sensors and spawners");
-    for (std::size_t i = 0; i < s.photocells.size(); ++i) {
-        const auto& p = s.photocells[i];
-        const auto on = p.conveyor < s.conveyors.size() ? s.conveyors[p.conveyor].spec.name : std::string("?");
-        selectable(fmt::format("{}  photocell on {} at {:.2f} m###p{}", p.name, on, p.along, i),
-                   Pick{Pick::Kind::Photocell, i});
-    }
-    for (std::size_t i = 0; i < s.proximities.size(); ++i) {
-        const auto& p = s.proximities[i];
-        selectable(fmt::format("{}  {} switch on {} at {:.2f} m###px{}", p.name,
-                               p.inductive ? "inductive" : "capacitive", conveyorName(p.conveyor), p.along, i),
-                   Pick{Pick::Kind::Proximity, i});
-    }
-    for (std::size_t i = 0; i < s.lasers.size(); ++i) {
-        const auto& l = s.lasers[i];
-        selectable(fmt::format("{}  laser over {} at {:.2f} m###la{}", l.name, conveyorName(l.conveyor), l.along, i),
-                   Pick{Pick::Kind::Laser, i});
-    }
-    for (std::size_t i = 0; i < s.curtains.size(); ++i) {
-        const auto& c = s.curtains[i];
-        selectable(
-            fmt::format("{}  light curtain on {} at {:.2f} m###lc{}", c.name, conveyorName(c.conveyor), c.along, i),
-            Pick{Pick::Kind::LightCurtain, i});
-    }
-    for (std::size_t i = 0; i < s.spawners.size(); ++i) {
-        const auto& sp = s.spawners[i];
-        const auto on = sp.conveyor < s.conveyors.size() ? s.conveyors[sp.conveyor].spec.name : std::string("?");
-        selectable(fmt::format("spawner on {}, every {:.2f} s###s{}", on, sp.interval, i),
-                   Pick{Pick::Kind::Spawner, i});
-    }
-    ImGui::SeparatorText("Actuators and bins");
-    for (std::size_t i = 0; i < s.pushers.size(); ++i) {
-        const auto& a = s.pushers[i];
-        selectable(fmt::format("{}  pusher on {} at {:.2f} m###pu{}", a.name, conveyorName(a.conveyor), a.along, i),
-                   Pick{Pick::Kind::Pusher, i});
-    }
-    for (std::size_t i = 0; i < s.diverters.size(); ++i) {
-        const auto& a = s.diverters[i];
-        selectable(fmt::format("{}  diverter on {} at {:.2f} m###di{}", a.name, conveyorName(a.conveyor), a.along, i),
-                   Pick{Pick::Kind::Diverter, i});
-    }
-    for (std::size_t i = 0; i < s.stoppers.size(); ++i) {
-        const auto& a = s.stoppers[i];
-        selectable(fmt::format("{}  stopper on {} at {:.2f} m###st{}", a.name, conveyorName(a.conveyor), a.along, i),
-                   Pick{Pick::Kind::Stopper, i});
-    }
-    for (std::size_t i = 0; i < s.bins.size(); ++i) {
-        const auto& b = s.bins[i];
-        const auto count = i < world_->bins().size() ? world_->bins()[i].count : 0;
-        selectable(fmt::format("{}  bin beside {}: {} boxes###bi{}", b.name, conveyorName(b.conveyor), count, i),
-                   Pick{Pick::Kind::Bin, i});
-    }
-
-    if (!s.cameras.empty()) {
-        ImGui::SeparatorText("Cameras");
-    }
-    for (std::size_t i = 0; i < s.cameras.size(); ++i) {
-        const auto& c = s.cameras[i];
-        selectable(fmt::format("{}  camera over {} at {:.3f} m###ca{}", c.name, conveyorName(c.conveyor), c.along, i),
-                   Pick{Pick::Kind::Camera, i});
-    }
+    drawLineTree();
 
     ImGui::SeparatorText("Add");
     const bool conveyorSelected = selected_ && selected_->kind == Pick::Kind::Conveyor;
@@ -575,6 +513,9 @@ void App::drawInspector() {
             break;
         case Pick::Kind::LightCurtain:
             drawCurtainInspector(selected_->index);
+            break;
+        case Pick::Kind::Item:
+            drawItemInspector(selected_->index);
             break;
         case Pick::Kind::None:
             break;

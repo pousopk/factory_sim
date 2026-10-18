@@ -44,10 +44,12 @@ DrawBox led(glm::vec3 center, glm::quat rotation, bool on) {
 }
 
 // Gives every box in `parts` an owner, and appends them to `boxes`.
-void addParts(std::vector<DrawBox>& boxes, std::vector<DrawBox> parts, Pick pick, const std::optional<Pick>& selected) {
+void addParts(std::vector<DrawBox>& boxes, std::vector<DrawBox> parts, Pick pick, const std::optional<Pick>& selected,
+              const std::optional<Pick>& hovered = std::nullopt) {
     for (auto& part : parts) {
         part.pick = pick;
         part.highlight = selected == pick;
+        part.hovered = hovered == pick;
         boxes.push_back(part);
     }
 }
@@ -381,81 +383,91 @@ std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& co
     return boxes;
 }
 
-std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::optional<Pick> selected) {
+std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::optional<Pick> selected,
+                                std::optional<Pick> hovered) {
     std::vector<DrawBox> boxes;
     const auto& conveyors = world.conveyors();
     for (std::size_t i = 0; i < conveyors.size(); ++i) {
-        addParts(boxes, conveyorBoxes(conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected);
+        addParts(boxes, conveyorBoxes(conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected, hovered);
         for (const auto& eye : conveyors[i].eyes) {
-            addParts(boxes, photocellBoxes(eye, conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected);
+            addParts(boxes, photocellBoxes(eye, conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected, hovered);
         }
     }
     for (std::size_t i = 0; i < world.photocells().size(); ++i) {
         const auto& photocell = world.photocells()[i];
         if (photocell.spec.conveyor < conveyors.size()) {
             addParts(boxes, photocellBoxes(photocell, conveyors[photocell.spec.conveyor]),
-                     Pick{Pick::Kind::Photocell, i}, selected);
+                     Pick{Pick::Kind::Photocell, i}, selected, hovered);
         }
     }
     const auto onConveyor = [&](std::size_t conveyor) { return conveyor < conveyors.size(); };
     for (std::size_t i = 0; i < world.pushers().size(); ++i) {
         const auto& a = world.pushers()[i];
         if (onConveyor(a.spec.conveyor)) {
-            addParts(boxes, pusherBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Pusher, i}, selected);
+            addParts(boxes, pusherBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Pusher, i}, selected,
+                     hovered);
         }
     }
     for (std::size_t i = 0; i < world.diverters().size(); ++i) {
         const auto& a = world.diverters()[i];
         if (onConveyor(a.spec.conveyor)) {
-            addParts(boxes, diverterBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Diverter, i}, selected);
+            addParts(boxes, diverterBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Diverter, i}, selected,
+                     hovered);
         }
     }
     for (std::size_t i = 0; i < world.stoppers().size(); ++i) {
         const auto& a = world.stoppers()[i];
         if (onConveyor(a.spec.conveyor)) {
-            addParts(boxes, stopperBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Stopper, i}, selected);
+            addParts(boxes, stopperBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Stopper, i}, selected,
+                     hovered);
         }
     }
     for (std::size_t i = 0; i < world.bins().size(); ++i) {
         const auto& b = world.bins()[i];
         if (onConveyor(b.spec.conveyor)) {
-            addParts(boxes, binBoxes(b, conveyors[b.spec.conveyor].spec), Pick{Pick::Kind::Bin, i}, selected);
+            addParts(boxes, binBoxes(b, conveyors[b.spec.conveyor].spec), Pick{Pick::Kind::Bin, i}, selected, hovered);
         }
     }
     for (std::size_t i = 0; i < world.spawners().size(); ++i) {
         const auto& spawner = world.spawners()[i];
         if (spawner.conveyor < conveyors.size()) {
-            addParts(boxes, spawnerBoxes(spawner, conveyors[spawner.conveyor]), Pick{Pick::Kind::Spawner, i}, selected);
+            addParts(boxes, spawnerBoxes(spawner, conveyors[spawner.conveyor]), Pick{Pick::Kind::Spawner, i}, selected,
+                     hovered);
         }
     }
     for (std::size_t i = 0; i < world.cameras().size(); ++i) {
         const auto& camera = world.cameras()[i];
         if (onConveyor(camera.spec.conveyor)) {
             addParts(boxes, cameraBoxes(camera, conveyors[camera.spec.conveyor], world.time()),
-                     Pick{Pick::Kind::Camera, i}, selected);
+                     Pick{Pick::Kind::Camera, i}, selected, hovered);
         }
     }
     for (std::size_t i = 0; i < world.proximities().size(); ++i) {
         const auto& p = world.proximities()[i];
         if (onConveyor(p.spec.conveyor)) {
-            addParts(boxes, proximityBoxes(p, conveyors[p.spec.conveyor]), Pick{Pick::Kind::Proximity, i}, selected);
+            addParts(boxes, proximityBoxes(p, conveyors[p.spec.conveyor]), Pick{Pick::Kind::Proximity, i}, selected,
+                     hovered);
         }
     }
     for (std::size_t i = 0; i < world.lasers().size(); ++i) {
         const auto& l = world.lasers()[i];
         if (onConveyor(l.spec.conveyor)) {
-            addParts(boxes, laserBoxes(l, conveyors[l.spec.conveyor]), Pick{Pick::Kind::Laser, i}, selected);
+            addParts(boxes, laserBoxes(l, conveyors[l.spec.conveyor]), Pick{Pick::Kind::Laser, i}, selected, hovered);
         }
     }
     for (std::size_t i = 0; i < world.curtains().size(); ++i) {
         const auto& c = world.curtains()[i];
         if (onConveyor(c.spec.conveyor)) {
-            addParts(boxes, curtainBoxes(c, conveyors[c.spec.conveyor]), Pick{Pick::Kind::LightCurtain, i}, selected);
+            addParts(boxes, curtainBoxes(c, conveyors[c.spec.conveyor]), Pick{Pick::Kind::LightCurtain, i}, selected,
+                     hovered);
         }
     }
     for (const auto& item : world.items()) {
         DrawBox box{item.position, item.rotation, item.size, item.color};
         box.round = item.shape == Shape::Tin;
+        box.pick = Pick{Pick::Kind::Item, static_cast<std::size_t>(item.id)};
+        box.highlight = selected == box.pick;
+        box.hovered = hovered == box.pick;
         boxes.push_back(box);
     }
     for (const auto& camera : world.cameras()) {

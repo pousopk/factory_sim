@@ -96,6 +96,7 @@ void main() {
     bool unlit = (flags & 1) != 0;
     bool highlight = (flags & 2) != 0;
     bool round = (flags & 4) != 0;
+    bool hovered = (flags & 8) != 0;
     if (unlit) {
         fragColor = vColor;
         return;
@@ -121,6 +122,7 @@ void main() {
     float sun = max(facing, 0.0) * (facing > 0.0 ? sunlight(vLight, facing) : 1.0);
     float sky = 0.35 + 0.25 * normal.y;
     color *= sky + 0.75 * sun;
+    if (hovered) color = mix(color, vec3(1.0), 0.22);               // lighter under the mouse
     if (highlight) color = mix(color, vec3(0.35, 0.65, 1.0), 0.45); // a blue tint
     fragColor = vec4(color, vColor.a);
 }
@@ -344,6 +346,7 @@ static_assert(sizeof(Instance) == 27 * sizeof(float), "tightly packed, as the at
 constexpr float kUnlit = 1.0F;
 constexpr float kHighlight = 2.0F;
 constexpr float kRound = 4.0F;
+constexpr float kHovered = 8.0F;
 
 Instance instanceOf(const DrawBox& box) {
     Instance instance{};
@@ -354,8 +357,8 @@ Instance instanceOf(const DrawBox& box) {
     std::copy_n(glm::value_ptr(color), 4, instance.color);
     instance.params[0] = box.stripeSpacing;
     instance.params[1] = box.stripeOffset;
-    instance.params[2] =
-        (box.unlit ? kUnlit : 0.0F) + (box.highlight ? kHighlight : 0.0F) + (box.round ? kRound : 0.0F);
+    instance.params[2] = (box.unlit ? kUnlit : 0.0F) + (box.highlight ? kHighlight : 0.0F) +
+                         (box.round ? kRound : 0.0F) + (box.hovered ? kHovered : 0.0F);
     return instance;
 }
 

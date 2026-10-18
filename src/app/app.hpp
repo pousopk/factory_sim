@@ -106,6 +106,10 @@ private:
     void drawProximityInspector(std::size_t index);
     void drawLaserInspector(std::size_t index);
     void drawCurtainInspector(std::size_t index);
+    void drawItemInspector(ItemId id);
+    // The Line panel as a tree, and what's under the mouse (tree.cpp).
+    void drawLineTree();
+    std::string describe(Pick pick) const; // a tooltip's text: name, kind, place, wiring, live values
     void drawCameraTriggering();
     void drawCameras();
     void drawTinTable();
@@ -218,6 +222,8 @@ private:
     Scene previewed_;                   // the scene it was built from
     std::optional<Pick::Kind> placing_; // a new device waiting for a click on a belt
     std::optional<Pick> hovered_;       // the belt under the mouse while placing
+    std::optional<Pick> hoverPick_;     // what's under the mouse in the 3D view
+    std::string lineFilter_;            // the Line panel's filter
     std::optional<Clip> clipboard_;
 
     // The Camera view window.
