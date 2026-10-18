@@ -1,5 +1,6 @@
 #include "render/scene.hpp"
 #include <algorithm>
+#include <cmath>
 #include <doctest/doctest.h>
 #include <numbers>
 
@@ -103,4 +104,39 @@ TEST_CASE("A photocell: housing, reflector, a beam at its height, and an LED lit
     photocell.output.set(0.1, true);
     parts = photocellBoxes(photocell, world.conveyors().front());
     CHECK(parts[3].color != ledOff);
+}
+
+TEST_CASE("A ray hits a box where it enters it, turned boxes included") {
+    DrawBox box;
+    box.center = {2.0F, 0.0F, 0.0F};
+    box.size = {1.0F, 1.0F, 1.0F};
+    const auto hit = hitDistance(box, {0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F});
+    REQUIRE(hit.has_value());
+    CHECK(*hit == doctest::Approx(1.5F));
+    CHECK_FALSE(hitDistance(box, {0.0F, 0.0F, 0.0F}, {-1.0F, 0.0F, 0.0F}).has_value()); // behind
+    CHECK_FALSE(hitDistance(box, {0.0F, 2.0F, 0.0F}, {1.0F, 0.0F, 0.0F}).has_value());  // above
+    // Turned 45 degrees around Y, its corner points at the ray: it's hit sooner.
+    box.rotation = glm::angleAxis(std::numbers::pi_v<float> / 4.0F, glm::vec3(0.0F, 1.0F, 0.0F));
+    CHECK(*hitDistance(box, {0.0F, 0.0F, 0.0F}, {1.0F, 0.0F, 0.0F}) == doctest::Approx(2.0F - std::sqrt(0.5F)));
+}
+
+TEST_CASE("Clicking picks the nearest selectable thing; its parts are highlighted") {
+    World world;
+    world.addConveyor(ConveyorSpec{});
+    PhotocellSpec cell;
+    cell.along = 1.0F;
+    world.addPhotocell(cell);
+    world.addSpawner(SpawnerSpec{});
+    const Pick photocell{Pick::Kind::Photocell, 0};
+    const auto boxes = sceneBoxes(world, 1.0, photocell);
+    // Straight down onto the belt, away from the photocell: the conveyor.
+    CHECK(pickAt(boxes, {2.0F, 3.0F, 0.0F}, {0.0F, -1.0F, 0.0F}) == Pick{Pick::Kind::Conveyor, 0});
+    // Down onto the photocell's housing, at the side of the belt.
+    const float housingZ = -(0.2F + kFrameWidth + kHousingSize / 2.0F);
+    CHECK(pickAt(boxes, {1.0F, 3.0F, housingZ}, {0.0F, -1.0F, 0.0F}) == photocell);
+    // Down onto the spawner's gate, above the belt at its start.
+    CHECK(pickAt(boxes, {0.2F, 3.0F, 0.0F}, {0.0F, -1.0F, 0.0F}) == Pick{Pick::Kind::Spawner, 0});
+    CHECK_FALSE(pickAt(boxes, {9.0F, 3.0F, 9.0F}, {0.0F, -1.0F, 0.0F}).has_value()); // nothing there
+    const auto highlighted = std::count_if(boxes.begin(), boxes.end(), [](const DrawBox& b) { return b.highlight; });
+    CHECK(highlighted == 4); // the photocell's four parts
 }

@@ -6,8 +6,10 @@ add_executable(factory_sim_tests
   test_main.cpp
   sim/world_test.cpp
   sim/sensors_test.cpp
+  sim/scene_test.cpp
   render/scene_test.cpp
   render/orbit_camera_test.cpp
+  edit/scene_history_test.cpp
 )
 target_link_libraries(factory_sim_tests PRIVATE factory_sim_view doctest::doctest fmt::fmt)
 add_test(NAME factory_sim_tests COMMAND factory_sim_tests)

@@ -1,39 +1,67 @@
 #pragma once
+#include "edit/scene_history.hpp"
 #include "render/orbit_camera.hpp"
 #include "render/renderer.hpp"
+#include "render/scene.hpp"
+#include "sim/scene.hpp"
 #include "sim/world.hpp"
+#include <filesystem>
 #include <memory>
+#include <optional>
+#include <string>
 
-// The application: the simulated world, the camera, and the panels to
-// change them. It draws one frame at a time into the current window (main
-// owns the window and the ImGui setup).
+// The application: the scene being designed, the world running it, the
+// camera, and the panels.
+//
+// The scene is the source of truth. The panels edit it (with undo), it's
+// saved to a file after every change, and the world follows it: settings
+// that don't move anything (speeds, sensors, spawners) are applied to the
+// running world live; a change to the layout builds a new world.
 //
 // The world runs in simulated time, in 1 ms steps; each frame advances it
 // by the real time since the last frame, times the time scale (0 when
-// paused). So 0.1x shows a 2 m/s belt moving 0.2 mm per real millisecond,
-// slow enough to watch, with exactly the same physics.
+// paused).
 namespace fsim {
 
 class App {
 public:
-    App(); // needs a current OpenGL context (for the renderer)
+    // Loads the scene from `scenePath` if it exists (a new one otherwise),
+    // and saves it there after every change. Needs a current OpenGL context.
+    explicit App(std::filesystem::path scenePath);
 
-    // One frame: advances the world by `realSeconds` of real time (scaled),
-    // handles the mouse, draws the scene and the panels.
+    // One frame: handles the mouse and keys, draws the panels, follows the
+    // scene's changes, advances the world by `realSeconds` (scaled), draws.
     void frame(double realSeconds, int width, int height);
 
-    World& world() { return *world_; }
-
 private:
-    void handleMouse(int height);
-    void drawPanels();
-    void drawSensorPanel();
+    void handleMouse(int width, int height);
+    void handleKeys();
+    void drawMainPanel();
+    void drawLinePanel();
+    void drawInspector();
+    void drawConveyorInspector(std::size_t index);
+    void drawPhotocellInspector(std::size_t index);
+    void drawSpawnerInspector(std::size_t index);
     void drawTriggers();
-    void resetScene();
+    void followScene(); // the world catches up with the scene
+    void restartRun();  // a new world from the scene: no boxes, time 0
+    void deleteSelected();
+    void keepSelectionValid();
+    // The conveyor something new should go on: the selected one, or the one
+    // the selected sensor or spawner is on.
+    std::optional<std::size_t> selectedConveyor() const;
 
+    Scene& scene() { return history_.current(); }
+
+    std::filesystem::path scenePath_;
+    SceneHistory history_;
+    Scene applied_; // the scene the world was last made to follow
     std::unique_ptr<World> world_;
+    std::optional<Pick> selected_;
     OrbitCamera camera_;
     Renderer renderer_;
+    std::string fileStatus_;
+
     bool paused_ = false;
     float timeScale_ = 1.0F;
     double frameSeconds_ = 0.0; // the last frame's real duration, for the panel

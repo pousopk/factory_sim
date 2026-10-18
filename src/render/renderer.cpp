@@ -36,6 +36,7 @@ uniform float uStripeSpacing; // 0: no stripes
 uniform float uStripeOffset;
 uniform float uAlpha;
 uniform float uUnlit;         // 1: a light source, not shaded
+uniform float uHighlight;     // 1: part of the selection
 out vec4 fragColor;
 
 const vec3 kSun = normalize(vec3(0.4, 1.0, 0.3));
@@ -61,7 +62,9 @@ void main() {
     vec3 normal = normalize(vNormal);
     float sun = max(dot(normal, kSun), 0.0);
     float sky = 0.35 + 0.25 * normal.y;
-    fragColor = vec4(color * (sky + 0.75 * sun), uAlpha);
+    color *= sky + 0.75 * sun;
+    if (uHighlight > 0.5) color = mix(color, vec3(0.35, 0.65, 1.0), 0.45); // a blue tint
+    fragColor = vec4(color, uAlpha);
 }
 )";
 
@@ -192,6 +195,7 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
         boxShader_.set("uStripeOffset", box.stripeOffset);
         boxShader_.set("uAlpha", box.alpha);
         boxShader_.set("uUnlit", box.unlit ? 1.0F : 0.0F);
+        boxShader_.set("uHighlight", box.highlight ? 1.0F : 0.0F);
         glDrawArrays(GL_TRIANGLES, 0, 36);
     };
     for (const auto& box : boxes) {

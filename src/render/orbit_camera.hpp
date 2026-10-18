@@ -27,6 +27,14 @@ public:
     glm::mat4 view() const;
     glm::mat4 projection(float aspect) const;
 
+    // The ray from the camera through a pixel (x right, y down, in a window
+    // of width x height): its origin and unit direction. For clicking things.
+    struct Ray {
+        glm::vec3 origin;
+        glm::vec3 direction;
+    };
+    Ray rayThrough(float x, float y, float width, float height) const;
+
     static constexpr float kFieldOfView = 0.8F; // vertical, radians (about 46 degrees)
     static constexpr float kMinDistance = 0.3F;
     static constexpr float kMaxDistance = 60.0F;

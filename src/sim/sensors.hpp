@@ -40,6 +40,8 @@ struct PhotocellSpec {
     float onFraction = 0.6F;     // covered more than this: on
     float offFraction = 0.4F;    // covered less than this: off
     double responseTime = 0.001; // s, from the beam to the output
+
+    bool operator==(const PhotocellSpec&) const = default;
 };
 
 // One time the output switched on: which box, when, and where it was.
@@ -81,6 +83,8 @@ struct EncoderSpec {
     int pulsesPerRevolution = 1024;
     float rollerDiameter = 0.05F; // m
     double pulsesPerMetre() const;
+
+    bool operator==(const EncoderSpec&) const = default;
 };
 
 } // namespace fsim

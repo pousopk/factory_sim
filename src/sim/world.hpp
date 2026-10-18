@@ -23,6 +23,8 @@ struct ConveyorSpec {
     float targetSpeed = 0.5F;  // m/s; the belt ramps towards it
     float acceleration = 1.0F; // m/s², like a VFD's ramp time (0 to 1 m/s in 1 s)
     EncoderSpec encoder;       // on the drive roller
+
+    bool operator==(const ConveyorSpec&) const = default;
 };
 
 struct Conveyor {
@@ -46,6 +48,8 @@ struct SpawnerSpec {
     glm::vec3 size{0.2F, 0.15F, 0.2F}; // length (along the belt), height, width
     float offset = 0.2F;               // where boxes appear, metres from the belt's start
     bool enabled = true;
+
+    bool operator==(const SpawnerSpec&) const = default;
 };
 
 // Everything the renderer and the UI need to know about one box.
@@ -76,6 +80,12 @@ public:
     std::size_t addSpawner(const SpawnerSpec& spec);
     std::size_t addPhotocell(const PhotocellSpec& spec);
 
+    // Replaces the photocells' and spawners' settings while running (an
+    // edit in the inspector). A photocell that stays on the same conveyor
+    // keeps its state (its output, its triggers); a spawner keeps its timing.
+    void setPhotocells(const std::vector<PhotocellSpec>& specs);
+    void setSpawners(const std::vector<SpawnerSpec>& specs);
+
     ItemId spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading = 0.0F);
     void removeItem(ItemId id);
     void clearItems(); // removes every item
@@ -96,6 +106,7 @@ public:
     std::vector<Conveyor>& conveyors() { return conveyors_; }
     const std::vector<Conveyor>& conveyors() const { return conveyors_; }
     std::vector<SpawnerSpec>& spawners() { return spawners_; }
+    const std::vector<SpawnerSpec>& spawners() const { return spawners_; }
     std::vector<Photocell>& photocells() { return photocells_; }
     const std::vector<Photocell>& photocells() const { return photocells_; }
 

@@ -1,16 +1,25 @@
 // factory_sim: a 3D factory simulator.
 //
-//   factory_sim        one conveyor carrying boxes; the panel changes speed, spawning and time
+//   factory_sim                 the scene in factory_sim_scene.json (a new one if it doesn't exist)
+//   factory_sim my_line.json    another scene file
+//
+// The scene is saved automatically after every change.
 #include "app/app.hpp"
 #include "render/gl.hpp" // before GLFW, which would otherwise include the old OpenGL header
 #include <GLFW/glfw3.h>
 #include <cstdio>
 #include <exception>
+#include <filesystem>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 2) {
+        std::fprintf(stderr, "usage: factory_sim [scene.json]\n");
+        return 2;
+    }
+    const std::filesystem::path scenePath = argc == 2 ? argv[1] : "factory_sim_scene.json";
     glfwSetErrorCallback(
         [](int error, const char* description) { std::fprintf(stderr, "GLFW error %d: %s\n", error, description); });
     if (!glfwInit()) {
@@ -37,7 +46,7 @@ int main() {
 
     int status = 0;
     try {
-        fsim::App app; // after the OpenGL context: it creates shaders and buffers
+        fsim::App app(scenePath); // after the OpenGL context: it creates shaders and buffers
         double last = glfwGetTime();
         while (!glfwWindowShouldClose(window)) {
             glfwPollEvents();

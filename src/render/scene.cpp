@@ -1,5 +1,7 @@
 #include "render/scene.hpp"
+#include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace fsim {
 
@@ -13,6 +15,16 @@ const glm::vec3 kReflectorColor{0.75F, 0.20F, 0.15F};
 const glm::vec3 kBeamColor{1.0F, 0.15F, 0.10F};
 const glm::vec3 kLedOn{1.0F, 0.85F, 0.10F};
 const glm::vec3 kLedOff{0.25F, 0.22F, 0.12F};
+const glm::vec3 kGateColor{0.85F, 0.62F, 0.15F};
+
+// Gives every box in `parts` an owner, and appends them to `boxes`.
+void addParts(std::vector<DrawBox>& boxes, std::vector<DrawBox> parts, Pick pick, const std::optional<Pick>& selected) {
+    for (auto& part : parts) {
+        part.pick = pick;
+        part.highlight = selected == pick;
+        boxes.push_back(part);
+    }
+}
 
 } // namespace
 
@@ -85,16 +97,41 @@ std::vector<DrawBox> photocellBoxes(const Photocell& photocell, const Conveyor& 
     return boxes;
 }
 
-std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds) {
+std::vector<DrawBox> spawnerBoxes(const SpawnerSpec& spawner, const Conveyor& conveyor) {
+    const auto rotation = glm::angleAxis(conveyor.spec.heading, glm::vec3(0.0F, 1.0F, 0.0F));
+    const auto along = conveyor.direction();
+    const glm::vec3 side{along.z, 0.0F, -along.x};
+    const auto base = conveyor.beltPoint(spawner.offset);
+    const float clearance = std::max(0.35F, spawner.size.y + 0.1F); // high enough for its boxes
+    const float halfSpan = conveyor.spec.width / 2.0F + kFrameWidth;
+    constexpr float bar = 0.03F;
     std::vector<DrawBox> boxes;
-    for (const auto& conveyor : world.conveyors()) {
-        const auto parts = conveyorBoxes(conveyor);
-        boxes.insert(boxes.end(), parts.begin(), parts.end());
+    for (const float sign : {-1.0F, 1.0F}) {
+        boxes.push_back(DrawBox{base + side * sign * halfSpan + glm::vec3(0.0F, clearance / 2.0F, 0.0F), rotation,
+                                glm::vec3(bar, clearance, bar), kGateColor});
     }
-    for (const auto& photocell : world.photocells()) {
-        if (photocell.spec.conveyor < world.conveyors().size()) {
-            const auto parts = photocellBoxes(photocell, world.conveyors()[photocell.spec.conveyor]);
-            boxes.insert(boxes.end(), parts.begin(), parts.end());
+    boxes.push_back(DrawBox{base + glm::vec3(0.0F, clearance, 0.0F), rotation,
+                            glm::vec3(bar, bar, 2.0F * halfSpan + bar), kGateColor});
+    return boxes;
+}
+
+std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::optional<Pick> selected) {
+    std::vector<DrawBox> boxes;
+    const auto& conveyors = world.conveyors();
+    for (std::size_t i = 0; i < conveyors.size(); ++i) {
+        addParts(boxes, conveyorBoxes(conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected);
+    }
+    for (std::size_t i = 0; i < world.photocells().size(); ++i) {
+        const auto& photocell = world.photocells()[i];
+        if (photocell.spec.conveyor < conveyors.size()) {
+            addParts(boxes, photocellBoxes(photocell, conveyors[photocell.spec.conveyor]),
+                     Pick{Pick::Kind::Photocell, i}, selected);
+        }
+    }
+    for (std::size_t i = 0; i < world.spawners().size(); ++i) {
+        const auto& spawner = world.spawners()[i];
+        if (spawner.conveyor < conveyors.size()) {
+            addParts(boxes, spawnerBoxes(spawner, conveyors[spawner.conveyor]), Pick{Pick::Kind::Spawner, i}, selected);
         }
     }
     for (const auto& item : world.items()) {
@@ -115,6 +152,52 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds) {
         }
     }
     return boxes;
+}
+
+std::optional<float> hitDistance(const DrawBox& box, glm::vec3 origin, glm::vec3 direction) {
+    // In the box's own axes the box is axis-aligned, from -half to +half:
+    // the ray enters it at the latest of the three entry points and leaves
+    // at the earliest exit (the "slab" method).
+    const auto inverse = glm::conjugate(box.rotation);
+    const auto o = inverse * (origin - box.center);
+    const auto d = inverse * direction;
+    const auto half = box.size / 2.0F;
+    float enter = -std::numeric_limits<float>::max();
+    float leave = std::numeric_limits<float>::max();
+    for (int axis = 0; axis < 3; ++axis) {
+        if (std::abs(d[axis]) < 1e-9F) {
+            if (std::abs(o[axis]) > half[axis]) {
+                return std::nullopt; // parallel to this pair of faces, and outside them
+            }
+            continue;
+        }
+        float a = (-half[axis] - o[axis]) / d[axis];
+        float b = (half[axis] - o[axis]) / d[axis];
+        if (a > b) {
+            std::swap(a, b);
+        }
+        enter = std::max(enter, a);
+        leave = std::min(leave, b);
+    }
+    if (enter > leave || leave < 0.0F) {
+        return std::nullopt;
+    }
+    return std::max(enter, 0.0F);
+}
+
+std::optional<Pick> pickAt(const std::vector<DrawBox>& boxes, glm::vec3 origin, glm::vec3 direction) {
+    std::optional<Pick> best;
+    float nearest = std::numeric_limits<float>::max();
+    for (const auto& box : boxes) {
+        if (box.pick.kind == Pick::Kind::None) {
+            continue;
+        }
+        if (const auto distance = hitDistance(box, origin, direction); distance && *distance < nearest) {
+            nearest = *distance;
+            best = box.pick;
+        }
+    }
+    return best;
 }
 
 } // namespace fsim

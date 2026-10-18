@@ -150,6 +150,25 @@ std::size_t World::addPhotocell(const PhotocellSpec& spec) {
     return photocells_.size() - 1;
 }
 
+void World::setPhotocells(const std::vector<PhotocellSpec>& specs) {
+    photocells_.resize(specs.size());
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+        if (photocells_[i].spec.conveyor != specs[i].conveyor) {
+            photocells_[i] = Photocell{}; // on another conveyor: a different sensor, starting afresh
+        }
+        photocells_[i].spec = specs[i];
+    }
+}
+
+void World::setSpawners(const std::vector<SpawnerSpec>& specs) {
+    const auto before = spawners_.size();
+    spawners_ = specs;
+    spawnerStates_.resize(specs.size());
+    for (auto i = before; i < specs.size(); ++i) {
+        spawnerStates_[i].nextSpawn = time() + specs[i].interval; // a new one starts its own rhythm
+    }
+}
+
 std::int64_t World::encoderCountAt(std::size_t conveyor, double t) const {
     const auto& c = conveyors_.at(conveyor);
     const double stepEnd = time();

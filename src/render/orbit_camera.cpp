@@ -45,4 +45,17 @@ glm::mat4 OrbitCamera::projection(float aspect) const {
     return glm::perspective(kFieldOfView, aspect, 0.02F, 200.0F);
 }
 
+OrbitCamera::Ray OrbitCamera::rayThrough(float x, float y, float width, float height) const {
+    // The pixel in normalized device coordinates (-1..1, y up), then back
+    // through the projection and view to two points: on the near plane and
+    // on the far plane. The ray goes from one through the other.
+    const glm::vec2 ndc{2.0F * x / std::max(width, 1.0F) - 1.0F, 1.0F - 2.0F * y / std::max(height, 1.0F)};
+    const auto inverse = glm::inverse(projection(width / std::max(height, 1.0F)) * view());
+    auto nearPoint = inverse * glm::vec4(ndc, -1.0F, 1.0F);
+    auto farPoint = inverse * glm::vec4(ndc, 1.0F, 1.0F);
+    nearPoint /= nearPoint.w;
+    farPoint /= farPoint.w;
+    return Ray{glm::vec3(nearPoint), glm::normalize(glm::vec3(farPoint - nearPoint))};
+}
+
 } // namespace fsim

@@ -54,6 +54,21 @@ set(CPP_RTTI_ENABLED ON CACHE BOOL "" FORCE)        # our code uses RTTI (e.g. s
 set(CPP_EXCEPTIONS_ENABLED ON CACHE BOOL "" FORCE)
 FetchContent_MakeAvailable(JoltPhysics)
 factory_sim_mark_system(Jolt)
+# Jolt is optimised even in Debug builds: we debug our code, not Jolt's, and
+# unoptimised physics is too slow to keep up with real time.
+target_compile_options(Jolt PRIVATE $<$<CONFIG:Debug>:-O2>)
+
+# --- tl::expected: value-or-error results (std::expected is C++23) ---
+FetchContent_Declare(tl-expected GIT_REPOSITORY https://github.com/TartanLlama/expected.git GIT_TAG v1.1.0)
+set(EXPECTED_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(EXPECTED_BUILD_PACKAGE OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(tl-expected)
+factory_sim_mark_system(expected)
+
+# --- nlohmann/json: the scene file ---
+FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz DOWNLOAD_EXTRACT_TIMESTAMP TRUE)
+FetchContent_MakeAvailable(json)
+factory_sim_mark_system(nlohmann_json)
 
 find_package(Threads REQUIRED)
 
@@ -75,17 +90,19 @@ add_library(factory_sim_core STATIC
   src/sim/world.cpp
   src/sim/signal.cpp
   src/sim/sensors.cpp
+  src/sim/scene.cpp
 )
 target_include_directories(factory_sim_core PUBLIC src)
 target_link_libraries(factory_sim_core
-  PUBLIC  factory_sim_options glm::glm-header-only Jolt Threads::Threads
-  PRIVATE fmt::fmt
+  PUBLIC  factory_sim_options glm::glm-header-only Jolt Threads::Threads tl::expected
+  PRIVATE fmt::fmt nlohmann_json::nlohmann_json
 )
 
 # --- What to draw and where from: plain geometry, no OpenGL, so it's tested too ---
 add_library(factory_sim_view STATIC
   src/render/scene.cpp
   src/render/orbit_camera.cpp
+  src/edit/scene_history.cpp
 )
 target_include_directories(factory_sim_view PUBLIC src)
 target_link_libraries(factory_sim_view PUBLIC factory_sim_core)
