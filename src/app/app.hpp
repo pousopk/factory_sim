@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <set>
 #include <string>
 
 // The application: the scene being designed, the world running it, the
@@ -55,6 +56,11 @@ private:
     void drawControl(); // the control section of the main panel
     void drawPlcStatus();
     void drawPlcVariables();
+    // The logic analyser (analyser.cpp): timelines, histograms, event log.
+    void drawAnalyser();
+    void drawTimelines();
+    void drawHistograms();
+    void drawEventLog();
     // A new world (or program) for the scene, the PLC kinds included. The old
     // one goes first: its soft_plc may hold the monitoring port the new one needs.
     void rebuildWorld();
@@ -79,6 +85,20 @@ private:
     std::string fileStatus_;
     std::string programError_; // why the scene's control program couldn't start
     std::string variableFilter_;
+
+    // The logic analyser's state.
+    bool showAnalyser_ = false;
+    float analyserSeconds_ = 5.0F;  // how much time the timelines show
+    bool followTime_ = true;        // the timelines follow the simulation (off: look around freely)
+    double viewFrom_ = 0.0;         // the time span shown, shared by the traces and the speed plot
+    double viewTo_ = 5.0;
+    double markerA_ = 0.0;          // two markers to measure a time difference
+    double markerB_ = 0.0;
+    bool markersPlaced_ = false;
+    std::set<std::string> hiddenTraces_;
+    int histogramPhotocell_ = 0;
+    std::string eventFilter_;
+    std::string exportStatus_;
 
     bool paused_ = false;
     float timeScale_ = 1.0F;

@@ -121,9 +121,10 @@ add_library(factory_sim_view STATIC
   src/render/scene.cpp
   src/render/orbit_camera.cpp
   src/edit/scene_history.cpp
+  src/analysis/analysis.cpp
 )
 target_include_directories(factory_sim_view PUBLIC src)
-target_link_libraries(factory_sim_view PUBLIC factory_sim_core)
+target_link_libraries(factory_sim_view PUBLIC factory_sim_core PRIVATE fmt::fmt)
 
 # --- The 3D application ---
 if(FACTORY_SIM_BUILD_APP)
@@ -154,6 +155,7 @@ if(FACTORY_SIM_BUILD_APP)
   add_executable(factory_sim
     src/app/main.cpp
     src/app/app.cpp
+    src/app/analyser.cpp
     src/render/shader.cpp
     src/render/renderer.cpp
   )

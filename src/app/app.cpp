@@ -129,6 +129,7 @@ void App::frame(double realSeconds, int width, int height) {
     drawIoTable();
     drawControlPanel();
     drawPlcVariables();
+    drawAnalyser();
 
     // An edit is finished when no widget is being used: then it's one undo step, saved at once.
     if (!ImGui::IsAnyItemActive() && history_.commit()) {
@@ -380,6 +381,9 @@ void App::drawMainPanel() {
                            : kDim,
                        "%s", fileStatus_.empty() ? scenePath_.string().c_str() : fileStatus_.c_str());
     ImGui::PopTextWrapPos();
+
+    ImGui::Checkbox("Logic analyser", &showAnalyser_);
+    ImGui::SetItemTooltip("Every signal over time, trigger error histograms, and the event log");
 
     ImGui::SeparatorText("Camera");
     ImGui::TextColored(kDim,

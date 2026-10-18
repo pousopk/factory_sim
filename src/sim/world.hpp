@@ -6,6 +6,7 @@
 #include "sim/physics.hpp"
 #include "sim/sensors.hpp"
 #include <cstdint>
+#include <deque>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
@@ -23,6 +24,10 @@ struct Conveyor {
     JPH::BodyID body;
     std::vector<JPH::BodyID> guides; // its side rails, if it has any
     bool running = true;             // its motor's run command (from the control program, if it has one)
+    Signal motor;                    // the same, as a signal with the times it changed
+    // The belt's speed, sampled every scan (for the logic analyser): time and m/s.
+    std::deque<std::pair<double, float>> speedSamples;
+    static constexpr std::size_t kSpeedSamples = 12000; // two minutes of scans
 
     // The encoder's count: whole pulses since the start (negative if the belt ran backwards).
     std::int64_t encoderCount() const;
@@ -155,6 +160,9 @@ public:
     const std::vector<ButtonSpec>& buttons() const { return buttons_; }
     const std::vector<LampSpec>& lamps() const { return lamps_; }
     bool pressed(std::size_t button) const { return button < pressed_.size() && pressed_[button]; }
+    // The buttons and lamps as signals, for the logic analyser.
+    const Signal& buttonSignal(std::size_t button) const { return buttonSignals_.at(button); }
+    const Signal& lampSignal(std::size_t lamp) const { return lampSignals_.at(lamp); }
     void press(std::size_t button, bool down);
     bool lit(std::size_t lamp) const;
 
@@ -214,6 +222,8 @@ private:
     std::vector<ButtonSpec> buttons_;
     std::vector<LampSpec> lamps_;
     std::vector<bool> pressed_;
+    std::vector<Signal> buttonSignals_;
+    std::vector<Signal> lampSignals_;
     ItemId nextItemId_ = 1;
     std::size_t spawned_ = 0;
     std::size_t spawnedNok_ = 0;

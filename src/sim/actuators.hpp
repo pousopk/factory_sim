@@ -49,6 +49,7 @@ public:
     double position() const { return position_; } // 0 = retracted, 1 = extended
 
     // The cylinder's end position sensors, with exact switching times.
+    const Signal& valve() const { return valve_; } // the valve as commanded, with exact times
     const Signal& extended() const { return extended_; }
     const Signal& retracted() const { return retracted_; }
 
@@ -56,6 +57,7 @@ private:
     bool extend_ = false;
     double commandTime_ = -1.0;
     double position_ = 0.0;
+    Signal valve_;
     Signal extended_;
     Signal retracted_;
 };

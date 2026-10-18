@@ -18,6 +18,7 @@ void Stroke::command(double time, bool extend) {
     }
     extend_ = extend;
     commandTime_ = time;
+    valve_.set(time, extend);
 }
 
 void Stroke::update(double stepStart, double stepEnd) {

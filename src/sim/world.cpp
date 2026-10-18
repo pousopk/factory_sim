@@ -190,6 +190,7 @@ std::size_t World::addConveyor(const ConveyorSpec& spec) {
         }
     }
 
+    conveyor.motor.set(time(), true); // runs until a program says otherwise
     conveyors_.push_back(conveyor);
     return index;
 }
@@ -380,11 +381,14 @@ void World::setPanel(const std::vector<ButtonSpec>& buttons, const std::vector<L
     buttons_ = buttons;
     lamps_ = lamps;
     pressed_.resize(buttons.size(), false);
+    buttonSignals_.resize(buttons.size());
+    lampSignals_.resize(lamps.size());
 }
 
 void World::press(std::size_t button, bool down) {
     if (button < pressed_.size()) {
         pressed_[button] = down;
+        buttonSignals_[button].set(time(), down);
     }
 }
 
@@ -425,9 +429,21 @@ void World::scan(double time) {
         write(buttons_[i].address, pressed(i) != buttons_[i].normallyClosed ? 1U : 0U);
     }
 
+    // The belts' speeds, for the analyser's speed plot.
+    for (auto& conveyor : conveyors_) {
+        conveyor.speedSamples.emplace_back(time, conveyor.speed);
+        if (conveyor.speedSamples.size() > Conveyor::kSpeedSamples) {
+            conveyor.speedSamples.pop_front();
+        }
+    }
+
     if (!program_) {
         for (auto& conveyor : conveyors_) {
             conveyor.running = true;
+            conveyor.motor.set(time, true);
+        }
+        for (auto& lamp : lampSignals_) {
+            lamp.set(time, false);
         }
         return; // no program: nothing drives the outputs
     }
@@ -452,6 +468,10 @@ void World::scan(double time) {
     std::for_each(stoppers_.begin(), stoppers_.end(), valve);
     for (auto& conveyor : conveyors_) {
         conveyor.running = read(conveyor.spec.runOutput).value_or(true); // no run output: it always runs
+        conveyor.motor.set(time, conveyor.running);
+    }
+    for (std::size_t i = 0; i < lamps_.size(); ++i) {
+        lampSignals_[i].set(time, lit(i));
     }
 }
 

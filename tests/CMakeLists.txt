@@ -12,6 +12,7 @@ add_executable(factory_sim_tests
   render/scene_test.cpp
   render/orbit_camera_test.cpp
   edit/scene_history_test.cpp
+  analysis/analysis_test.cpp
 )
 target_link_libraries(factory_sim_tests PRIVATE factory_sim_view doctest::doctest fmt::fmt)
 add_test(NAME factory_sim_tests COMMAND factory_sim_tests)

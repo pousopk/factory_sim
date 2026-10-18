@@ -13,6 +13,7 @@
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+#include <implot.h>
 
 int main(int argc, char** argv) {
     if (argc > 2) {
@@ -39,6 +40,7 @@ int main(int argc, char** argv) {
     glEnable(GL_MULTISAMPLE);
 
     ImGui::CreateContext();
+    ImPlot::CreateContext(); // the logic analyser's plots
     ImGui::GetIO().IniFilename = nullptr;
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
@@ -72,6 +74,7 @@ int main(int argc, char** argv) {
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplGlfw_Shutdown();
+    ImPlot::DestroyContext();
     ImGui::DestroyContext();
     glfwDestroyWindow(window);
     glfwTerminate();
