@@ -79,3 +79,4 @@ The scene is saved after every change; there's no Save button and the file isn't
 | `src/app/` | The application: window, frame loop, panels |
 | `tests/` | doctest unit tests, mirroring `src/`; they run the simulation headless |
 | `docs/lessons/` | What each milestone teaches, with review questions |
+| `docs/topics/` | One subject at a time across the whole project: the GPU and OpenGL, 3D maths, shaders, numbers and time, the physics engine, design notes |
