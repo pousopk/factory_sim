@@ -41,6 +41,14 @@ The simulator should reproduce this and answer: at a given conveyor speed and ti
 
 ## Building
 
+It builds `soft_plc` from source, from a folder next to it, so clone both side by side:
+
+```bash
+git clone https://github.com/pousopk/soft_plc.git
+git clone https://github.com/pousopk/factory_sim.git
+cd factory_sim
+```
+
 ```bash
 cmake -S . -B build          # Debug by default, with AddressSanitizer + UBSan
 cmake --build build -j
@@ -93,3 +101,7 @@ The scene is saved after every change; there's no Save button and the file isn't
 | `tests/` | doctest unit tests, mirroring `src/`; they run the simulation headless |
 | `docs/lessons/` | What each milestone teaches, with review questions |
 | `docs/topics/` | One subject at a time across the whole project: the GPU and OpenGL, 3D maths, shaders, numbers and time, the physics engine, design notes |
+
+## License
+
+MIT: see [LICENSE](LICENSE).
