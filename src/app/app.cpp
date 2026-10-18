@@ -45,6 +45,26 @@ bool scaledSlider(const char* label, float& value, float scale, float min, float
     return changed;
 }
 
+// An address, typed in: red when it isn't an address of the expected kind.
+void addressField(const char* label, std::string& text, IoAddress::Area area, IoAddress::Size size) {
+    const auto address = parseAddress(text);
+    const bool ok =
+        text.empty() || (address && address->area == area && address->size == size && IoImage::fits(*address));
+    if (!ok) {
+        ImGui::PushStyleColor(ImGuiCol_Text, kProblem);
+    }
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::InputTextWithHint(
+        label, area == IoAddress::Area::Input ? (size == IoAddress::Size::Bit ? "%IX0.0" : "%ID8") : "%QX0.0", &text);
+    if (!ok) {
+        ImGui::PopStyleColor();
+        ImGui::SetItemTooltip("Not a valid %s here",
+                              area == IoAddress::Area::Input
+                                  ? (size == IoAddress::Size::Bit ? "input bit" : "input double word")
+                                  : "output bit");
+    }
+}
+
 // A combo to pick one of the scene's conveyors, by name.
 void conveyorCombo(const char* label, std::size_t& conveyor, const Scene& scene) {
     ImGui::SetNextItemWidth(kFieldWidth);
@@ -86,6 +106,8 @@ void App::frame(double realSeconds, int width, int height) {
     drawLinePanel();
     drawInspector();
     drawTriggers();
+    drawIoTable();
+    drawControlPanel();
 
     // An edit is finished when no widget is being used: then it's one undo step, saved at once.
     if (!ImGui::IsAnyItemActive() && history_.commit()) {
@@ -113,6 +135,11 @@ void App::followScene() {
     }
     if (sameLayout(applied_, scene())) {
         applyLive(*world_, scene()); // the boxes keep running
+        // A new program (or a sorter set up differently) starts from scratch;
+        // the boxes keep running meanwhile.
+        if (scene().control != applied_.control || scene().sorters != applied_.sorters) {
+            world_->setProgram(makeProgram(scene()));
+        }
     } else {
         world_ = buildWorld(scene()); // something moved: the run starts again
     }
@@ -309,6 +336,8 @@ void App::drawMainPanel() {
     }
     ImGui::SetItemTooltip("Start the run again: no boxes, time 0. (A change to the layout does this too.)");
 
+    drawControl();
+
     ImGui::SeparatorText("Scene");
     ImGui::BeginDisabled(!history_.canUndo());
     if (ImGui::Button("Undo")) {
@@ -340,7 +369,7 @@ void App::drawMainPanel() {
 
 // Everything in the line, to select, and buttons to add and remove things.
 void App::drawLinePanel() {
-    ImGui::SetNextWindowPos(ImVec2(10, 420), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(10, 450), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(340, 330), ImGuiCond_FirstUseEver);
     ImGui::Begin("Line");
     auto& s = scene();
@@ -453,8 +482,8 @@ void App::drawLinePanel() {
 }
 
 void App::drawInspector() {
-    ImGui::SetNextWindowPos(ImVec2(1010, 380), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(380, 0), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(1040, 240), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 0), ImGuiCond_FirstUseEver);
     ImGui::Begin("Inspector");
     if (!selected_) {
         ImGui::TextColored(kDim, "Click something in the view, or in the Line panel.");
@@ -555,6 +584,12 @@ void App::drawConveyorInspector(std::size_t index) {
         ImGui::TextColored(kDim, "at this speed a box moves %.2f mm per 1 ms step", running.speed); // m/s = mm/ms
     }
 
+    ImGui::SeparatorText("I/O");
+    addressField("run output", spec.runOutput, IoAddress::Area::Output, IoAddress::Size::Bit);
+    ImGui::SetItemTooltip(
+        "The motor runs while this output is on (only with a control program).\nEmpty: it always runs.");
+    addressField("encoder count", spec.encoderInput, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
+
     ImGui::SeparatorText("Encoder");
     ImGui::SetNextItemWidth(kFieldWidth);
     ImGui::SliderInt("pulses/rev", &spec.encoder.pulsesPerRevolution, 100, 5000);
@@ -584,6 +619,10 @@ void App::drawPhotocellInspector(std::size_t index) {
     }
     ImGui::SetNextItemWidth(kFieldWidth);
     ImGui::InputText("name", &spec.name);
+    addressField("input", spec.input, IoAddress::Area::Input, IoAddress::Size::Bit);
+    ImGui::Checkbox("sees only bad (NOK) boxes", &spec.onlyNok);
+    ImGui::SetItemTooltip("A stand-in for an inspection system (a camera, a colour sensor)\n"
+                          "whose output says \"this one is bad\".");
     conveyorCombo("on conveyor", spec.conveyor, s);
     const float length = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.length : 1.0F;
     ImGui::SetNextItemWidth(kFieldWidth);
@@ -608,6 +647,8 @@ void App::drawSpawnerInspector(std::size_t index) {
     auto& spawner = s.spawners[index];
     conveyorCombo("on conveyor", spawner.conveyor, s);
     ImGui::Checkbox("spawn boxes", &spawner.enabled);
+    scaledSlider("bad boxes", spawner.nokFraction, 100.0F, 0.0F, 100.0F, "%.0f %%");
+    ImGui::SetItemTooltip("The share of boxes that are bad (NOK, red), chosen at random");
     scaledSlider("every", spawner.interval, 1.0, 0.2F, 5.0F, "%.2f s");
     scaledSlider("jitter", spawner.intervalJitter, 1.0, 0.0F, 1.0F, "± %.2f s");
     ImGui::SetNextItemWidth(kFieldWidth);
@@ -640,8 +681,8 @@ void App::drawTriggers() {
             ? selected_->index
             : 0;
     const auto& photocell = world_->photocells()[index];
-    ImGui::SetNextWindowPos(ImVec2(940, 10), ImGuiCond_FirstUseEver);
-    ImGui::SetNextWindowSize(ImVec2(450, 330), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(1040, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 220), ImGuiCond_FirstUseEver);
     ImGui::Begin("Triggers");
     ImGui::Text("%s", photocell.spec.name.c_str());
     ImGui::SameLine();
@@ -707,6 +748,13 @@ void strokeTimes(StrokeSpec& stroke) {
     scaledSlider("back in", stroke.retractTime, 1000.0, 20.0F, 2000.0F, "%.0f ms");
 }
 
+template <class Spec> void ioFields(Spec& spec) {
+    ImGui::SeparatorText("I/O");
+    addressField("valve", spec.valveOutput, IoAddress::Area::Output, IoAddress::Size::Bit);
+    addressField("extended", spec.extendedInput, IoAddress::Area::Input, IoAddress::Size::Bit);
+    addressField("retracted", spec.retractedInput, IoAddress::Area::Input, IoAddress::Size::Bit);
+}
+
 } // namespace
 
 // The valve, by hand: Extend and Retract switch it; Fire once extends and
@@ -739,7 +787,9 @@ void App::drawStrokeControls(Stroke& stroke, Pick pick) {
     ImGui::ProgressBar(static_cast<float>(stroke.position()), ImVec2(kFieldWidth, 0.0F), "");
     ImGui::SameLine();
     ImGui::TextColored(kDim, "stroke");
-    ImGui::TextColored(kDim, "Milestone 5 will drive these from control logic; here, by hand.");
+    if (world_->program() != nullptr) {
+        ImGui::TextColored(kDim, "A control program is running: it sets the valve every scan, over these buttons.");
+    }
 }
 
 void App::finishFiring() {
@@ -776,6 +826,7 @@ void App::drawPusherInspector(std::size_t index) {
     ImGui::SetNextItemWidth(kFieldWidth);
     ImGui::SliderFloat("paddle", &spec.paddleLength, 0.05F, 1.0F, "%.2f m long");
     strokeTimes(spec.stroke);
+    ioFields(spec);
     ImGui::TextColored(kDim, "Pushes boxes off the other side: put a bin there.");
     if (index < world_->pushers().size()) {
         drawStrokeControls(world_->pushers()[index].stroke, Pick{Pick::Kind::Pusher, index});
@@ -794,6 +845,7 @@ void App::drawDiverterInspector(std::size_t index) {
     sideCombo(spec.side);
     scaledSlider("angle", spec.angle, kDegrees, 15.0F, 70.0F, "%.0f deg");
     strokeTimes(spec.stroke);
+    ioFields(spec);
     ImGui::TextColored(kDim, "Swung out, it guides boxes off the other side.");
     if (index < world_->diverters().size()) {
         drawStrokeControls(world_->diverters()[index].stroke, Pick{Pick::Kind::Diverter, index});
@@ -811,6 +863,7 @@ void App::drawStopperInspector(std::size_t index) {
     ImGui::SliderFloat("position", &spec.along, 0.0F, length, "%.3f m");
     scaledSlider("rises", spec.height, 1000.0F, 10.0F, 150.0F, "%.0f mm above the belt");
     strokeTimes(spec.stroke);
+    ioFields(spec);
     ImGui::TextColored(kDim, "Raised, boxes stop against it while the belt slides under them.");
     if (index < world_->stoppers().size()) {
         drawStrokeControls(world_->stoppers()[index].stroke, Pick{Pick::Kind::Stopper, index});
@@ -832,12 +885,275 @@ void App::drawBinInspector(std::size_t index) {
     ImGui::SetItemTooltip("Along the belt, height, out from the belt");
     if (index < world_->bins().size()) {
         auto& bin = world_->bins()[index];
-        ImGui::Text("%zu boxes landed in it", bin.count);
+        ImGui::Text("%zu boxes landed in it: %zu bad, %zu good", bin.count, bin.nokCount, bin.count - bin.nokCount);
         ImGui::SameLine();
         if (ImGui::SmallButton("Reset count")) {
             bin.count = 0;
+            bin.nokCount = 0;
         }
     }
+}
+
+// ---------------------------------------------------------------- Control
+
+void App::drawControl() {
+    ImGui::SeparatorText("Control");
+    auto& s = scene();
+    int control = s.control == Control::BuiltInSorting ? 1 : 0;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    if (ImGui::Combo("program", &control, "none (by hand)\0built-in sorting\0")) {
+        s.control = control == 1 ? Control::BuiltInSorting : Control::Manual;
+    }
+    ImGui::SetItemTooltip("What drives the valves and motors, scan by scan (every 10 ms), through the I/O.\n"
+                          "Milestone 6 adds soft_plc.");
+    ImGui::TextColored(kDim, "%zu boxes made, %zu bad", world_->spawned(), world_->spawnedNok());
+    if (ImGui::SmallButton("Load the sorting demo")) {
+        s = sortingDemo(); // one undo step, like any other change
+        selected_.reset();
+    }
+    ImGui::SetItemTooltip("A conveyor, a third of the boxes bad, an inspection sensor, a pusher, a bin,\n"
+                          "and the built-in sorter wired to them. Ctrl+Z brings your scene back.");
+
+    if (s.control != Control::BuiltInSorting) {
+        return;
+    }
+    const auto* sorting = dynamic_cast<const BuiltInSorting*>(world_->program());
+    const auto status = sorting != nullptr ? sorting->status() : std::vector<BuiltInSorting::Status>{};
+    std::optional<std::size_t> remove;
+    for (std::size_t i = 0; i < s.sorters.size(); ++i) {
+        auto& sorter = s.sorters[i];
+        ImGui::PushID(static_cast<int>(i));
+        const auto label = i < status.size() ? fmt::format("{}: fired {}, tracking {}###sorter", sorter.name,
+                                                           status[i].fired, status[i].waiting)
+                                             : sorter.name + "###sorter";
+        if (ImGui::TreeNode(label.c_str())) {
+            ImGui::SetNextItemWidth(kFieldWidth);
+            ImGui::InputText("name", &sorter.name);
+            addressField("NOK sensor", sorter.nokInput, IoAddress::Area::Input, IoAddress::Size::Bit);
+            addressField("encoder count", sorter.encoderInput, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
+            addressField("valve", sorter.valveOutput, IoAddress::Area::Output, IoAddress::Size::Bit);
+            addressField("extended", sorter.extendedInput, IoAddress::Area::Input, IoAddress::Size::Bit);
+            int distance = static_cast<int>(sorter.distance);
+            ImGui::SetNextItemWidth(kFieldWidth);
+            if (ImGui::DragInt("distance", &distance, 10.0F, 0, 1000000, "%d pulses")) {
+                sorter.distance = distance;
+            }
+            ImGui::SetItemTooltip("Encoder pulses from the sensor seeing a bad box to firing the pusher");
+            if (ImGui::SmallButton("Remove")) {
+                remove = i;
+            }
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
+    }
+    if (remove) {
+        s.sorters.erase(s.sorters.begin() + static_cast<std::ptrdiff_t>(*remove));
+    }
+    // A new sorter, wired to a sensor and a pusher chosen here.
+    int& sensor = newSorterSensor_;
+    int& pusher = newSorterPusher_;
+    if (!s.photocells.empty() && !s.pushers.empty()) {
+        sensor = std::clamp(sensor, 0, static_cast<int>(s.photocells.size()) - 1);
+        pusher = std::clamp(pusher, 0, static_cast<int>(s.pushers.size()) - 1);
+        ImGui::SetNextItemWidth(90.0F);
+        if (ImGui::BeginCombo("##sensor", s.photocells[static_cast<std::size_t>(sensor)].name.c_str())) {
+            for (std::size_t i = 0; i < s.photocells.size(); ++i) {
+                if (ImGui::Selectable(s.photocells[i].name.c_str(), static_cast<int>(i) == sensor)) {
+                    sensor = static_cast<int>(i);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        ImGui::SetNextItemWidth(90.0F);
+        if (ImGui::BeginCombo("##pusher", s.pushers[static_cast<std::size_t>(pusher)].name.c_str())) {
+            for (std::size_t i = 0; i < s.pushers.size(); ++i) {
+                if (ImGui::Selectable(s.pushers[i].name.c_str(), static_cast<int>(i) == pusher)) {
+                    pusher = static_cast<int>(i);
+                }
+            }
+            ImGui::EndCombo();
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("Add sorter")) {
+            s.sorters.push_back(sorterFor(s, static_cast<std::size_t>(sensor), static_cast<std::size_t>(pusher)));
+        }
+        ImGui::SetItemTooltip("Wired to this sensor and pusher, with the distance worked out from the layout\n"
+                              "and the belt's speed");
+    }
+}
+
+// Every address in the scene, with what it is and its value now: the PLC's
+// view of the line, like the I/O table of a PLC project.
+void App::drawIoTable() {
+    ImGui::SetNextWindowPos(ImVec2(1040, 640), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(350, 250), ImGuiCond_FirstUseEver);
+    ImGui::Begin("I/O");
+    struct Row {
+        std::string address;
+        std::string what;
+    };
+    std::vector<Row> rows;
+    const auto& s = scene();
+    const auto add = [&](const std::string& address, std::string what) {
+        if (!address.empty()) {
+            rows.push_back(Row{address, std::move(what)});
+        }
+    };
+    for (const auto& c : s.conveyors) {
+        add(c.spec.encoderInput, c.spec.name + " encoder count");
+        add(c.spec.runOutput, c.spec.name + " motor");
+    }
+    for (const auto& p : s.photocells) {
+        add(p.input, p.name + (p.onlyNok ? " inspection (bad box)" : " photocell"));
+    }
+    const auto actuator = [&](const auto& a, const char* kind) {
+        add(a.valveOutput, a.name + " " + kind + " valve");
+        add(a.extendedInput, a.name + " extended");
+        add(a.retractedInput, a.name + " retracted");
+    };
+    for (const auto& a : s.pushers)
+        actuator(a, "pusher");
+    for (const auto& a : s.diverters)
+        actuator(a, "diverter");
+    for (const auto& a : s.stoppers)
+        actuator(a, "stopper");
+    for (const auto& b : s.buttons)
+        add(b.address, b.name + (b.normallyClosed ? " button (NC)" : " button"));
+    for (const auto& l : s.lamps)
+        add(l.address, l.name + " lamp");
+    std::sort(rows.begin(), rows.end(), [](const Row& a, const Row& b) {
+        const auto pa = parseAddress(a.address);
+        const auto pb = parseAddress(b.address);
+        if (!pa || !pb)
+            return a.address < b.address;
+        return std::tie(pa->area, pa->byte, pa->bit) < std::tie(pb->area, pb->byte, pb->bit);
+    });
+    if (ImGui::BeginTable("io", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("address", ImGuiTableColumnFlags_WidthFixed, 70.0F);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 80.0F);
+        ImGui::TableSetupColumn("what");
+        ImGui::TableHeadersRow();
+        for (const auto& row : rows) {
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(row.address.c_str());
+            ImGui::TableNextColumn();
+            const auto address = parseAddress(row.address);
+            if (!address || !IoImage::fits(*address)) {
+                ImGui::TextColored(kProblem, "invalid");
+            } else if (address->size == IoAddress::Size::Bit) {
+                const bool on = world_->io().bit(*address);
+                ImGui::TextColored(on ? ImVec4(1.0F, 0.85F, 0.1F, 1.0F) : kDim, "%s", on ? "1" : "0");
+            } else {
+                ImGui::Text("%u", world_->io().value(*address));
+            }
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(row.what.c_str());
+        }
+        ImGui::EndTable();
+    }
+    ImGui::End();
+}
+
+// The operator's panel: buttons to press (momentary ones while the mouse
+// holds them, latching ones toggle) and lamps the program lights. Below,
+// the list of them to edit.
+void App::drawControlPanel() {
+    ImGui::SetNextWindowPos(ImVec2(360, 770), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(560, 120), ImGuiCond_FirstUseEver);
+    ImGui::Begin("Control panel");
+    auto& s = scene();
+    for (std::size_t i = 0; i < world_->buttons().size(); ++i) {
+        const auto& button = world_->buttons()[i];
+        ImGui::PushID(static_cast<int>(i));
+        if (i > 0) {
+            ImGui::SameLine();
+        }
+        if (button.latching) {
+            bool down = world_->pressed(i);
+            if (ImGui::Checkbox(button.name.c_str(), &down)) {
+                world_->press(i, down);
+            }
+        } else {
+            ImGui::Button(button.name.c_str(), ImVec2(80.0F, 40.0F));
+            world_->press(i, ImGui::IsItemActive()); // pressed while the mouse holds it
+        }
+        ImGui::PopID();
+    }
+    if (!world_->lamps().empty()) {
+        ImGui::Spacing();
+    }
+    for (std::size_t i = 0; i < world_->lamps().size(); ++i) {
+        ImGui::PushID(1000 + static_cast<int>(i));
+        if (i > 0) {
+            ImGui::SameLine();
+        }
+        led("##lamp", world_->lit(i));
+        ImGui::SameLine();
+        ImGui::TextUnformatted(world_->lamps()[i].name.c_str());
+        ImGui::PopID();
+    }
+    if (world_->buttons().empty() && world_->lamps().empty()) {
+        ImGui::TextColored(kDim, "No buttons or lamps yet.");
+    }
+
+    if (ImGui::CollapsingHeader("Edit buttons and lamps")) {
+        std::optional<std::size_t> removeButton;
+        for (std::size_t i = 0; i < s.buttons.size(); ++i) {
+            auto& b = s.buttons[i];
+            ImGui::PushID(2000 + static_cast<int>(i));
+            ImGui::SetNextItemWidth(90.0F);
+            ImGui::InputText("##name", &b.name);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70.0F);
+            ImGui::InputText("##address", &b.address);
+            ImGui::SameLine();
+            ImGui::Checkbox("NC", &b.normallyClosed);
+            ImGui::SetItemTooltip("Normally closed: the input is on while the button is NOT pressed (stop buttons)");
+            ImGui::SameLine();
+            ImGui::Checkbox("latching", &b.latching);
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) {
+                removeButton = i;
+            }
+            ImGui::PopID();
+        }
+        if (removeButton) {
+            s.buttons.erase(s.buttons.begin() + static_cast<std::ptrdiff_t>(*removeButton));
+        }
+        std::optional<std::size_t> removeLamp;
+        for (std::size_t i = 0; i < s.lamps.size(); ++i) {
+            auto& l = s.lamps[i];
+            ImGui::PushID(3000 + static_cast<int>(i));
+            ImGui::SetNextItemWidth(90.0F);
+            ImGui::InputText("##name", &l.name);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(70.0F);
+            ImGui::InputText("##address", &l.address);
+            ImGui::SameLine();
+            ImGui::TextColored(kDim, "lamp");
+            ImGui::SameLine();
+            if (ImGui::SmallButton("x")) {
+                removeLamp = i;
+            }
+            ImGui::PopID();
+        }
+        if (removeLamp) {
+            s.lamps.erase(s.lamps.begin() + static_cast<std::ptrdiff_t>(*removeLamp));
+        }
+        if (ImGui::SmallButton("+ Button")) {
+            s.buttons.push_back(ButtonSpec{fmt::format("S{}", s.buttons.size() + 1),
+                                           freeAddress(s, IoAddress::Area::Input, IoAddress::Size::Bit), false, false});
+        }
+        ImGui::SameLine();
+        if (ImGui::SmallButton("+ Lamp")) {
+            s.lamps.push_back(LampSpec{fmt::format("H{}", s.lamps.size() + 1),
+                                       freeAddress(s, IoAddress::Area::Output, IoAddress::Size::Bit)});
+        }
+    }
+    ImGui::End();
 }
 
 } // namespace fsim

@@ -80,8 +80,154 @@ Scene defaultScene() {
     PhotocellSpec photocell;
     photocell.name = "B1";
     photocell.along = 1.5F;
+    photocell.input = "%IX0.0";
     scene.photocells.push_back(photocell);
+    scene.conveyors[0].spec.encoderInput = "%ID8";
     return scene;
+}
+
+Scene sortingDemo() {
+    Scene scene;
+    PlacedConveyor conveyor;
+    conveyor.spec.name = "C1";
+    conveyor.spec.length = 6.0F;
+    conveyor.spec.targetSpeed = 0.5F;
+    conveyor.spec.encoderInput = "%ID8";
+    scene.conveyors.push_back(conveyor);
+    SpawnerSpec spawner;
+    spawner.interval = 1.0;
+    spawner.intervalJitter = 0.2;
+    spawner.nokFraction = 0.3F;
+    scene.spawners.push_back(spawner);
+    PhotocellSpec inspection;
+    inspection.name = "BQ";
+    inspection.along = 1.5F;
+    inspection.onlyNok = true;
+    inspection.input = "%IX0.0";
+    scene.photocells.push_back(inspection);
+    PusherSpec pusher;
+    pusher.name = "P1";
+    pusher.along = 3.5F;
+    pusher.valveOutput = "%QX0.0";
+    pusher.extendedInput = "%IX0.1";
+    pusher.retractedInput = "%IX0.2";
+    scene.pushers.push_back(pusher);
+    addBin(scene, 0); // across from the pusher
+    scene.sorters.push_back(sorterFor(scene, 0, 0));
+    scene.lamps.push_back(LampSpec{"Reject", "%QX0.0"});
+    scene.control = Control::BuiltInSorting;
+    return scene;
+}
+
+std::unique_ptr<ControlProgram> makeProgram(const Scene& scene) {
+    if (scene.control == Control::BuiltInSorting) {
+        return std::make_unique<BuiltInSorting>(scene.sorters);
+    }
+    return nullptr;
+}
+
+namespace {
+
+// Every address the scene's devices, buttons and lamps use.
+std::vector<IoAddress> usedAddresses(const Scene& scene) {
+    std::vector<IoAddress> used;
+    const auto add = [&](const std::string& text) {
+        if (const auto address = parseAddress(text)) {
+            used.push_back(*address);
+        }
+    };
+    for (const auto& c : scene.conveyors) {
+        add(c.spec.runOutput);
+        add(c.spec.encoderInput);
+    }
+    for (const auto& p : scene.photocells) {
+        add(p.input);
+    }
+    const auto actuator = [&](const auto& a) {
+        add(a.valveOutput);
+        add(a.extendedInput);
+        add(a.retractedInput);
+    };
+    std::for_each(scene.pushers.begin(), scene.pushers.end(), actuator);
+    std::for_each(scene.diverters.begin(), scene.diverters.end(), actuator);
+    std::for_each(scene.stoppers.begin(), scene.stoppers.end(), actuator);
+    for (const auto& b : scene.buttons) {
+        add(b.address);
+    }
+    for (const auto& l : scene.lamps) {
+        add(l.address);
+    }
+    return used;
+}
+
+} // namespace
+
+std::string freeAddress(const Scene& scene, IoAddress::Area area, IoAddress::Size size) {
+    const auto used = usedAddresses(scene);
+    const auto taken = [&](std::size_t byte, std::size_t width, std::optional<unsigned> bit) {
+        return std::any_of(used.begin(), used.end(), [&](const IoAddress& u) {
+            if (u.area != area) {
+                return false;
+            }
+            const std::size_t uWidth = u.size == IoAddress::Size::Bit ? 1 : u.size == IoAddress::Size::Word ? 2 : 4;
+            const bool overlap = u.byte < byte + width && byte < u.byte + uWidth;
+            if (!overlap) {
+                return false;
+            }
+            // Two bits in the same byte only clash if they're the same bit.
+            return !(bit && u.size == IoAddress::Size::Bit && u.bit != *bit);
+        });
+    };
+    if (size == IoAddress::Size::Bit) {
+        for (std::size_t byte = 0; byte < 8; ++byte) {
+            for (unsigned bit = 0; bit < 8; ++bit) {
+                if (!taken(byte, 1, bit)) {
+                    return formatAddress(IoAddress{area, size, byte, bit});
+                }
+            }
+        }
+        return {};
+    }
+    const std::size_t width = size == IoAddress::Size::Word ? 2 : 4;
+    for (std::size_t byte = 8; byte + width <= IoImage::kBytes; byte += width) {
+        if (!taken(byte, width, std::nullopt)) {
+            return formatAddress(IoAddress{area, size, byte, 0});
+        }
+    }
+    return {};
+}
+
+// Where to fire, in encoder pulses after the sensor sees a box. The sensor
+// switches when the box's front edge reaches it. The paddle should meet the
+// box's middle when it's halfway across the belt, which is the dead time
+// plus half the stroke after firing; the box moves on meanwhile, so it fires
+// that much earlier:
+//
+//   distance = (pusher - sensor) + box length / 2 - speed x (dead time + stroke / 2)
+//
+// The time part assumes the belt's set speed: change the speed and the
+// sorter needs a new distance (real sorters compensate the same way).
+SorterSpec sorterFor(const Scene& scene, std::size_t photocell, std::size_t pusher) {
+    const auto& sensor = scene.photocells.at(photocell);
+    const auto& paddle = scene.pushers.at(pusher);
+    const auto& conveyor = scene.conveyors.at(paddle.conveyor).spec;
+    float boxLength = 0.2F;
+    for (const auto& spawner : scene.spawners) {
+        if (spawner.conveyor == paddle.conveyor) {
+            boxLength = spawner.size.x;
+        }
+    }
+    const double lead =
+        conveyor.targetSpeed * (paddle.stroke.deadTime + paddle.stroke.extendTime / 2.0); // m travelled while it moves
+    const double metres = (paddle.along - sensor.along) + boxLength / 2.0 - lead;
+    SorterSpec sorter;
+    sorter.name = "Sorter " + paddle.name;
+    sorter.nokInput = sensor.input;
+    sorter.encoderInput = scene.conveyors.at(sensor.conveyor).spec.encoderInput;
+    sorter.valveOutput = paddle.valveOutput;
+    sorter.extendedInput = paddle.extendedInput;
+    sorter.distance = std::max<std::int64_t>(0, std::llround(metres * conveyor.encoder.pulsesPerMetre()));
+    return sorter;
 }
 
 std::vector<ConveyorSpec> placeConveyors(const Scene& scene) {
@@ -163,6 +309,12 @@ std::unique_ptr<World> buildWorld(const Scene& scene) {
         if (exists(bin.conveyor))
             world->addBin(bin);
     }
+    for (const auto& bin : scene.bins) {
+        if (exists(bin.conveyor))
+            world->addBin(bin);
+    }
+    world->setPanel(scene.buttons, scene.lamps);
+    world->setProgram(makeProgram(scene));
     return world;
 }
 
@@ -174,6 +326,7 @@ void applyLive(World& world, const Scene& scene) {
     world.setPhotocells(scene.photocells);
     world.setSpawners(scene.spawners);
     world.setStrokes(scene.pushers, scene.diverters, scene.stoppers);
+    world.setPanel(scene.buttons, scene.lamps);
 }
 
 // ---------------------------------------------------------------- Editing
@@ -194,6 +347,8 @@ std::size_t addConveyorAfter(Scene& scene, std::size_t conveyor, Turn turn) {
     if (turn != Turn::Straight) {
         next.spec.beltHeight -= 0.02F;
     }
+    next.spec.runOutput.clear(); // its own I/O, not the one it was copied from
+    next.spec.encoderInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
     scene.conveyors.push_back(next);
     return scene.conveyors.size() - 1;
 }
@@ -211,6 +366,7 @@ std::size_t addConveyor(Scene& scene) {
     PlacedConveyor conveyor;
     conveyor.spec.name = freeName(scene.conveyors, "C", [](const PlacedConveyor& c) { return c.spec.name; });
     conveyor.spec.start = {0.0F, 0.0F, any ? furthest + 1.0F + conveyor.spec.width / 2.0F : 0.0F};
+    conveyor.spec.encoderInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
     scene.conveyors.push_back(conveyor);
     return scene.conveyors.size() - 1;
 }
@@ -247,7 +403,11 @@ std::size_t addPusher(Scene& scene, std::size_t conveyor) {
     pusher.name = freeName(scene.pushers, "P", [](const PusherSpec& p) { return p.name; });
     pusher.conveyor = conveyor;
     pusher.along = scene.conveyors.at(conveyor).spec.length * 2.0F / 3.0F;
-    scene.pushers.push_back(pusher);
+    // Wired to the next free output for its valve, and inputs for its sensors.
+    pusher.valveOutput = freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Bit);
+    pusher.extendedInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
+    scene.pushers.push_back(pusher); // (in the scene now, so the next free input is another one)
+    scene.pushers.back().retractedInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
     return scene.pushers.size() - 1;
 }
 
@@ -256,7 +416,11 @@ std::size_t addDiverter(Scene& scene, std::size_t conveyor) {
     diverter.name = freeName(scene.diverters, "D", [](const DiverterSpec& d) { return d.name; });
     diverter.conveyor = conveyor;
     diverter.along = scene.conveyors.at(conveyor).spec.length / 3.0F;
-    scene.diverters.push_back(diverter);
+    // Wired to the next free output for its valve, and inputs for its sensors.
+    diverter.valveOutput = freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Bit);
+    diverter.extendedInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
+    scene.diverters.push_back(diverter); // (in the scene now, so the next free input is another one)
+    scene.diverters.back().retractedInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
     return scene.diverters.size() - 1;
 }
 
@@ -265,7 +429,11 @@ std::size_t addStopper(Scene& scene, std::size_t conveyor) {
     stopper.name = freeName(scene.stoppers, "S", [](const StopperSpec& s) { return s.name; });
     stopper.conveyor = conveyor;
     stopper.along = scene.conveyors.at(conveyor).spec.length - 0.3F;
-    scene.stoppers.push_back(stopper);
+    // Wired to the next free output for its valve, and inputs for its sensors.
+    stopper.valveOutput = freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Bit);
+    stopper.extendedInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
+    scene.stoppers.push_back(stopper); // (in the scene now, so the next free input is another one)
+    scene.stoppers.back().retractedInput = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
     return scene.stoppers.size() - 1;
 }
 
@@ -303,6 +471,7 @@ std::size_t addPhotocell(Scene& scene, std::size_t conveyor) {
     photocell.name = freeName(scene.photocells, "B", [](const PhotocellSpec& p) { return p.name; });
     photocell.conveyor = conveyor;
     photocell.along = scene.conveyors.at(conveyor).spec.length / 2.0F;
+    photocell.input = freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
     scene.photocells.push_back(photocell);
     return scene.photocells.size() - 1;
 }
@@ -354,6 +523,18 @@ StrokeSpec strokeFrom(const json& j, StrokeSpec s) {
     return s;
 }
 
+// An actuator's I/O wiring, in the file and back.
+template <class Spec> void ioToJson(json& j, const Spec& s) {
+    j["valveOutput"] = s.valveOutput;
+    j["extendedInput"] = s.extendedInput;
+    j["retractedInput"] = s.retractedInput;
+}
+template <class Spec> void ioFromJson(const json& j, Spec& s) {
+    s.valveOutput = j.value("valveOutput", std::string());
+    s.extendedInput = j.value("extendedInput", std::string());
+    s.retractedInput = j.value("retractedInput", std::string());
+}
+
 const char* sideName(Side side) {
     return side == Side::Left ? "left" : "right";
 }
@@ -391,6 +572,8 @@ std::string sceneToJson(const Scene& scene) {
                          {"acceleration", c.spec.acceleration},
                          {"guideLeft", c.spec.guideLeft},
                          {"guideRight", c.spec.guideRight},
+                         {"runOutput", c.spec.runOutput},
+                         {"encoderInput", c.spec.encoderInput},
                          {"encoder",
                           {{"pulsesPerRevolution", c.spec.encoder.pulsesPerRevolution},
                            {"rollerDiameter", c.spec.encoder.rollerDiameter}}}};
@@ -411,7 +594,9 @@ std::string sceneToJson(const Scene& scene) {
                                       {"beamDiameter", p.beamDiameter},
                                       {"onFraction", p.onFraction},
                                       {"offFraction", p.offFraction},
-                                      {"responseTime", p.responseTime}});
+                                      {"responseTime", p.responseTime},
+                                      {"input", p.input},
+                                      {"onlyNok", p.onlyNok}});
     }
     for (const auto& s : scene.spawners) {
         data["spawners"].push_back({{"conveyor", s.conveyor},
@@ -419,30 +604,29 @@ std::string sceneToJson(const Scene& scene) {
                                     {"intervalJitter", s.intervalJitter},
                                     {"size", vec3(s.size)},
                                     {"offset", s.offset},
-                                    {"enabled", s.enabled}});
+                                    {"enabled", s.enabled},
+                                    {"nokFraction", s.nokFraction}});
     }
     for (const auto& p : scene.pushers) {
-        data["pushers"].push_back({{"name", p.name},
-                                   {"conveyor", p.conveyor},
-                                   {"along", p.along},
-                                   {"side", sideName(p.side)},
-                                   {"paddleLength", p.paddleLength},
-                                   {"stroke", strokeJson(p.stroke)}});
+        json entry = {{"name", p.name},           {"conveyor", p.conveyor},         {"along", p.along},
+                      {"side", sideName(p.side)}, {"paddleLength", p.paddleLength}, {"stroke", strokeJson(p.stroke)}};
+        ioToJson(entry, p);
+        data["pushers"].push_back(entry);
     }
     for (const auto& d : scene.diverters) {
-        data["diverters"].push_back({{"name", d.name},
-                                     {"conveyor", d.conveyor},
-                                     {"along", d.along},
-                                     {"side", sideName(d.side)},
-                                     {"angle", d.angle},
-                                     {"stroke", strokeJson(d.stroke)}});
+        json entry = {{"name", d.name},           {"conveyor", d.conveyor}, {"along", d.along},
+                      {"side", sideName(d.side)}, {"angle", d.angle},       {"stroke", strokeJson(d.stroke)}};
+        ioToJson(entry, d);
+        data["diverters"].push_back(entry);
     }
     for (const auto& s : scene.stoppers) {
-        data["stoppers"].push_back({{"name", s.name},
-                                    {"conveyor", s.conveyor},
-                                    {"along", s.along},
-                                    {"height", s.height},
-                                    {"stroke", strokeJson(s.stroke)}});
+        json entry = {{"name", s.name},
+                      {"conveyor", s.conveyor},
+                      {"along", s.along},
+                      {"height", s.height},
+                      {"stroke", strokeJson(s.stroke)}};
+        ioToJson(entry, s);
+        data["stoppers"].push_back(entry);
     }
     for (const auto& b : scene.bins) {
         data["bins"].push_back({{"name", b.name},
@@ -451,6 +635,25 @@ std::string sceneToJson(const Scene& scene) {
                                 {"side", sideName(b.side)},
                                 {"size", vec3(b.size)}});
     }
+    data["buttons"] = json::array();
+    for (const auto& b : scene.buttons) {
+        data["buttons"].push_back(
+            {{"name", b.name}, {"address", b.address}, {"normallyClosed", b.normallyClosed}, {"latching", b.latching}});
+    }
+    data["lamps"] = json::array();
+    for (const auto& l : scene.lamps) {
+        data["lamps"].push_back({{"name", l.name}, {"address", l.address}});
+    }
+    data["sorters"] = json::array();
+    for (const auto& s : scene.sorters) {
+        data["sorters"].push_back({{"name", s.name},
+                                   {"nokInput", s.nokInput},
+                                   {"encoderInput", s.encoderInput},
+                                   {"valveOutput", s.valveOutput},
+                                   {"extendedInput", s.extendedInput},
+                                   {"distance", s.distance}});
+    }
+    data["control"] = scene.control == Control::BuiltInSorting ? "built-in sorting" : "manual";
     return data.dump(2) + "\n";
 }
 
@@ -475,6 +678,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             spec.acceleration = c.value("acceleration", defaults.spec.acceleration);
             spec.guideLeft = c.value("guideLeft", false);
             spec.guideRight = c.value("guideRight", false);
+            spec.runOutput = c.value("runOutput", std::string());
+            spec.encoderInput = c.value("encoderInput", std::string());
             const auto encoder = c.value("encoder", json::object());
             spec.encoder.pulsesPerRevolution = encoder.value("pulsesPerRevolution", spec.encoder.pulsesPerRevolution);
             spec.encoder.rollerDiameter = encoder.value("rollerDiameter", spec.encoder.rollerDiameter);
@@ -509,6 +714,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             photocell.onFraction = p.value("onFraction", photocell.onFraction);
             photocell.offFraction = p.value("offFraction", photocell.offFraction);
             photocell.responseTime = p.value("responseTime", photocell.responseTime);
+            photocell.input = p.value("input", std::string());
+            photocell.onlyNok = p.value("onlyNok", false);
             if (auto ok = checkConveyor(photocell.conveyor, "photocell " + photocell.name); !ok) {
                 return tl::unexpected(ok.error());
             }
@@ -522,6 +729,7 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             spawner.size = vec3From(s.value("size", json()), spawner.size);
             spawner.offset = s.value("offset", spawner.offset);
             spawner.enabled = s.value("enabled", spawner.enabled);
+            spawner.nokFraction = s.value("nokFraction", spawner.nokFraction);
             if (auto ok = checkConveyor(spawner.conveyor, "a spawner"); !ok) {
                 return tl::unexpected(ok.error());
             }
@@ -535,6 +743,7 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             p.side = sideFrom(j.value("side", json()), p.side);
             p.paddleLength = j.value("paddleLength", p.paddleLength);
             p.stroke = strokeFrom(j.value("stroke", json()), p.stroke);
+            ioFromJson(j, p);
             if (auto ok = checkConveyor(p.conveyor, "pusher " + p.name); !ok) {
                 return tl::unexpected(ok.error());
             }
@@ -548,6 +757,7 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             d.side = sideFrom(j.value("side", json()), d.side);
             d.angle = j.value("angle", d.angle);
             d.stroke = strokeFrom(j.value("stroke", json()), d.stroke);
+            ioFromJson(j, d);
             if (auto ok = checkConveyor(d.conveyor, "diverter " + d.name); !ok) {
                 return tl::unexpected(ok.error());
             }
@@ -560,6 +770,7 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             s.along = j.value("along", s.along);
             s.height = j.value("height", s.height);
             s.stroke = strokeFrom(j.value("stroke", json()), s.stroke);
+            ioFromJson(j, s);
             if (auto ok = checkConveyor(s.conveyor, "stopper " + s.name); !ok) {
                 return tl::unexpected(ok.error());
             }
@@ -577,6 +788,32 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             }
             scene.bins.push_back(b);
         }
+        for (const auto& j : data.value("buttons", json::array())) {
+            ButtonSpec b;
+            b.name = j.value("name", b.name);
+            b.address = j.value("address", b.address);
+            b.normallyClosed = j.value("normallyClosed", b.normallyClosed);
+            b.latching = j.value("latching", b.latching);
+            scene.buttons.push_back(b);
+        }
+        for (const auto& j : data.value("lamps", json::array())) {
+            LampSpec l;
+            l.name = j.value("name", l.name);
+            l.address = j.value("address", l.address);
+            scene.lamps.push_back(l);
+        }
+        for (const auto& j : data.value("sorters", json::array())) {
+            SorterSpec s;
+            s.name = j.value("name", s.name);
+            s.nokInput = j.value("nokInput", s.nokInput);
+            s.encoderInput = j.value("encoderInput", s.encoderInput);
+            s.valveOutput = j.value("valveOutput", s.valveOutput);
+            s.extendedInput = j.value("extendedInput", s.extendedInput);
+            s.distance = j.value("distance", s.distance);
+            scene.sorters.push_back(s);
+        }
+        scene.control = data.value("control", std::string("manual")) == "built-in sorting" ? Control::BuiltInSorting
+                                                                                           : Control::Manual;
         return scene;
     } catch (const json::exception& error) {
         return tl::unexpected(std::string("the scene file isn't valid: ") + error.what());

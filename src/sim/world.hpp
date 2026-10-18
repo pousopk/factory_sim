@@ -1,6 +1,8 @@
 #pragma once
 #include "sim/actuators.hpp"
+#include "sim/control.hpp"
 #include "sim/conveyor_spec.hpp"
+#include "sim/io.hpp"
 #include "sim/physics.hpp"
 #include "sim/sensors.hpp"
 #include <cstdint>
@@ -20,6 +22,7 @@ struct Conveyor {
     double travelledBefore = 0.0; // the same, at the start of the last step
     JPH::BodyID body;
     std::vector<JPH::BodyID> guides; // its side rails, if it has any
+    bool running = true;             // its motor's run command (from the control program, if it has one)
 
     // The encoder's count: whole pulses since the start (negative if the belt ran backwards).
     std::int64_t encoderCount() const;
@@ -35,6 +38,7 @@ struct SpawnerSpec {
     glm::vec3 size{0.2F, 0.15F, 0.2F}; // length (along the belt), height, width
     float offset = 0.2F;               // where boxes appear, metres from the belt's start
     bool enabled = true;
+    float nokFraction = 0.0F; // the share of boxes that are bad (NOK), at random: 0.25 = one in four
 
     bool operator==(const SpawnerSpec&) const = default;
 };
@@ -47,6 +51,7 @@ struct ItemView {
     glm::vec3 size;
     glm::vec3 color;
     glm::vec3 velocity;
+    bool nok = false; // a bad box, to be sorted out
 };
 
 // The simulated factory: conveyors, boxes on them, and time.
@@ -74,6 +79,7 @@ struct Bin {
     BinSpec spec;
     std::vector<JPH::BodyID> walls;
     std::size_t count = 0;      // boxes that landed in it
+    std::size_t nokCount = 0;   // of which bad ones
     std::vector<ItemId> inside; // the boxes in it now (counted once each)
 };
 
@@ -104,7 +110,7 @@ public:
     void setStrokes(const std::vector<PusherSpec>& pushers, const std::vector<DiverterSpec>& diverters,
                     const std::vector<StopperSpec>& stoppers);
 
-    ItemId spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading = 0.0F);
+    ItemId spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading = 0.0F, bool nok = false);
     void removeItem(ItemId id);
     void clearItems(); // removes every item
 
@@ -133,6 +139,25 @@ public:
     const std::vector<Diverter>& diverters() const { return diverters_; }
     std::vector<Stopper>& stoppers() { return stoppers_; }
     const std::vector<Stopper>& stoppers() const { return stoppers_; }
+    // ---- Control
+    //
+    // Every scan (10 ms, like soft_plc's cycle), the devices' inputs are
+    // written into io(), the control program runs, and its outputs drive the
+    // valves, motors and lamps. Without a program, nothing drives them:
+    // actuators are moved by hand, and conveyors always run.
+    static constexpr int kScanSteps = 10;
+    IoImage& io() { return io_; }
+    const IoImage& io() const { return io_; }
+    void setProgram(std::unique_ptr<ControlProgram> program) { program_ = std::move(program); }
+    ControlProgram* program() { return program_.get(); }
+    // The control panel: its buttons (pressed or not) and lamps.
+    void setPanel(const std::vector<ButtonSpec>& buttons, const std::vector<LampSpec>& lamps);
+    const std::vector<ButtonSpec>& buttons() const { return buttons_; }
+    const std::vector<LampSpec>& lamps() const { return lamps_; }
+    bool pressed(std::size_t button) const { return button < pressed_.size() && pressed_[button]; }
+    void press(std::size_t button, bool down);
+    bool lit(std::size_t lamp) const;
+
     std::vector<Bin>& bins() { return bins_; }
     const std::vector<Bin>& bins() const { return bins_; }
 
@@ -142,6 +167,9 @@ public:
 
     std::vector<ItemView> items() const;
     std::size_t itemCount() const { return items_.size(); }
+    // How many boxes the spawners have made since the start, and how many of them were bad.
+    std::size_t spawned() const { return spawned_; }
+    std::size_t spawnedNok() const { return spawnedNok_; }
 
 private:
     struct Item {
@@ -150,6 +178,7 @@ private:
         glm::vec3 size;
         glm::vec3 color;
         double onFloorSince = -1.0; // when it came to rest on the floor, or -1
+        bool nok = false;
     };
     struct SpawnerState {
         double nextSpawn = 0.0;
@@ -163,6 +192,7 @@ private:
     void updatePhotocells(double stepStart, double stepEnd);
     void updateActuators(double stepStart, double stepEnd);
     void updateBins();
+    void scan(double time);
     JPH::BodyID addKinematic(const Pose& pose, float friction);
     JPH::BodyID addStatic(const Pose& pose, float friction);
 
@@ -178,7 +208,14 @@ private:
     std::vector<Diverter> diverters_;
     std::vector<Stopper> stoppers_;
     std::vector<Bin> bins_;
+    IoImage io_;
+    std::unique_ptr<ControlProgram> program_;
+    std::vector<ButtonSpec> buttons_;
+    std::vector<LampSpec> lamps_;
+    std::vector<bool> pressed_;
     ItemId nextItemId_ = 1;
+    std::size_t spawned_ = 0;
+    std::size_t spawnedNok_ = 0;
     std::uint64_t stepCount_ = 0;
     double pending_ = 0.0;    // time not yet simulated (less than one step)
     std::mt19937 random_{42}; // fixed seed: every run is the same

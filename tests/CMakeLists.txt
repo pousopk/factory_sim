@@ -8,6 +8,7 @@ add_executable(factory_sim_tests
   sim/sensors_test.cpp
   sim/scene_test.cpp
   sim/actuators_test.cpp
+  sim/control_test.cpp
   render/scene_test.cpp
   render/orbit_camera_test.cpp
   edit/scene_history_test.cpp

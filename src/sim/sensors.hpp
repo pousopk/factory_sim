@@ -40,6 +40,10 @@ struct PhotocellSpec {
     float onFraction = 0.6F;     // covered more than this: on
     float offFraction = 0.4F;    // covered less than this: off
     double responseTime = 0.001; // s, from the beam to the output
+    std::string input;           // the PLC input its output is wired to, like "%IX0.0" (empty: none)
+    // Sees only NOK boxes: a stand-in for an inspection system (a camera, a
+    // colour sensor) whose output says "this one is bad".
+    bool onlyNok = false;
 
     bool operator==(const PhotocellSpec&) const = default;
 };

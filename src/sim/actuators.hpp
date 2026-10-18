@@ -73,6 +73,11 @@ struct PusherSpec {
     // instead of flying over it: the stroke time decides where it lands.
     StrokeSpec stroke{0.015, 0.5, 0.3};
 
+    // I/O: the valve's output, and the end position sensors' inputs (empty: not wired).
+    std::string valveOutput;
+    std::string extendedInput;
+    std::string retractedInput;
+
     bool operator==(const PusherSpec&) const = default;
 };
 
@@ -85,6 +90,11 @@ struct DiverterSpec {
     float angle = 0.7F;     // radians the arm swings out (40 degrees)
     StrokeSpec stroke{0.015, 0.25, 0.25};
 
+    // I/O: the valve's output, and the end position sensors' inputs (empty: not wired).
+    std::string valveOutput;
+    std::string extendedInput;
+    std::string retractedInput;
+
     bool operator==(const DiverterSpec&) const = default;
 };
 
@@ -95,6 +105,11 @@ struct StopperSpec {
     float along = 2.5F;   // metres from the belt's start
     float height = 0.05F; // how far above the belt it rises
     StrokeSpec stroke{0.015, 0.06, 0.06};
+
+    // I/O: the valve's output, and the end position sensors' inputs (empty: not wired).
+    std::string valveOutput;
+    std::string extendedInput;
+    std::string retractedInput;
 
     bool operator==(const StopperSpec&) const = default;
 };

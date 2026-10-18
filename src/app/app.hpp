@@ -50,6 +50,9 @@ private:
     void drawStrokeControls(Stroke& stroke, Pick pick);
     void finishFiring(); // pushers fired once retract when they get there
     void drawTriggers();
+    void drawIoTable();
+    void drawControlPanel();
+    void drawControl(); // the control section of the main panel
     void followScene(); // the world catches up with the scene
     void restartRun();  // a new world from the scene: no boxes, time 0
     void deleteSelected();
@@ -74,7 +77,9 @@ private:
     double frameSeconds_ = 0.0; // the last frame's real duration, for the panel
     int stepsLastFrame_ = 0;
     float scanMilliseconds_ = 10.0F; // a PLC reading the photocell this often (for the trigger table)
-    std::vector<Pick> firing_;       // actuators fired once by hand: they retract when fully out
+    int newSorterSensor_ = 0;        // the sensor and pusher chosen for the next sorter
+    int newSorterPusher_ = 0;
+    std::vector<Pick> firing_; // actuators fired once by hand: they retract when fully out
 };
 
 } // namespace fsim

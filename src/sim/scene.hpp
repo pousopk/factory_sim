@@ -1,4 +1,5 @@
 #pragma once
+#include "sim/control.hpp"
 #include "sim/sensors.hpp"
 #include "sim/world.hpp"
 #include <cstddef>
@@ -34,6 +35,10 @@ struct PlacedConveyor {
     bool operator==(const PlacedConveyor&) const = default;
 };
 
+// What drives the actuators and motors: nothing (they're moved by hand and
+// conveyors always run), or the built-in sorting program.
+enum class Control { Manual, BuiltInSorting };
+
 struct Scene {
     std::vector<PlacedConveyor> conveyors;
     std::vector<PhotocellSpec> photocells;
@@ -42,6 +47,11 @@ struct Scene {
     std::vector<DiverterSpec> diverters;
     std::vector<StopperSpec> stoppers;
     std::vector<BinSpec> bins;
+    // The control panel, and the control program.
+    std::vector<ButtonSpec> buttons;
+    std::vector<LampSpec> lamps;
+    std::vector<SorterSpec> sorters;
+    Control control = Control::Manual;
 
     bool operator==(const Scene&) const = default;
 };
@@ -61,6 +71,25 @@ std::vector<ConveyorSpec> placeConveyors(const Scene& scene);
 // world can take the new scene's settings (speeds, sensors, spawners,
 // actuator timing) live; if not, the world has to be built again.
 bool sameLayout(const Scene& a, const Scene& b);
+
+// A ready-made line for the sorting demo: a conveyor with an encoder, boxes
+// of which about a third are bad, an inspection sensor, a pusher and its
+// bin, and the built-in sorter wired to them.
+Scene sortingDemo();
+
+// The control program the scene asks for (null for manual control).
+std::unique_ptr<ControlProgram> makeProgram(const Scene& scene);
+
+// The first free address of a kind, as soft_plc writes it: the first input
+// or output bit not used by any device, button or lamp ("%IX0.3"), or the
+// first free double word for an encoder ("%ID8"). Bits are in bytes 0-7,
+// double words in bytes 8-15. Empty if none is left.
+std::string freeAddress(const Scene& scene, IoAddress::Area area, IoAddress::Size size);
+
+// A sorter wired to an inspection photocell and a pusher on the same
+// conveyor: their addresses, and the distance in encoder pulses worked out
+// from the layout (see the comment in scene.cpp).
+SorterSpec sorterFor(const Scene& scene, std::size_t photocell, std::size_t pusher);
 
 // A new world for the scene (no boxes yet, time 0).
 std::unique_ptr<World> buildWorld(const Scene& scene);

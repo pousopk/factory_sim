@@ -93,6 +93,16 @@ The reverted change is the important part. A change that sounds right but measur
 
 ---
 
+## 9. A seam for the PLC
+
+**Decision:** control programs see the line **only** through the I/O image (`ControlProgram::scan(IoImage&, double time)`), with addresses in soft_plc's notation and soft_plc's byte layout. The World reads the devices into the image, runs the program, and applies the outputs, every 10 ms.
+
+**Why:** it's exactly how a PLC sees a machine, so a program written against the image can be swapped for a real PLC program without the rest of the simulator noticing. The built-in sorter is written that way on purpose: it knows "%IX0.0 is the bad-box sensor", not "photocell 0". In milestone 6, soft_plc replaces it by copying the same bytes into its own process image and back.
+
+**What it costs:** an indirection that's sometimes awkward (the sorter parses its addresses; a device without an address is invisible to the program), and the timing a PLC has: a sensor's change reaches the program at the next scan, up to 10 ms later. That's not a cost to hide, it's the effect the simulator exists to show.
+
+This is a **seam** in the design: a narrow, stable interface at a place where you expect to plug in something different later. Choosing where seams go (the I/O image, the I/O driver in soft_plc, the Program interface in its scan cycle) is most of designing for change.
+
 ## Review questions
 
 **1.** Why doesn't undo restore the boxes' positions?

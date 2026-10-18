@@ -23,6 +23,10 @@ struct ConveyorSpec {
     // Side guides: rails along the belt's edges that keep boxes on it.
     bool guideLeft = false;
     bool guideRight = false;
+    // I/O: an output that runs the motor (empty: it always runs), and the
+    // input double word its encoder's count is written to (empty: none).
+    std::string runOutput;
+    std::string encoderInput;
 
     bool operator==(const ConveyorSpec&) const = default;
 };

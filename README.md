@@ -67,6 +67,8 @@ The scene is saved after every change; there's no Save button and the file isn't
 
 **The Inspector** edits the selection: a conveyor's place (or, if it follows another, its turn, and **Detach**), size, speed, ramp and encoder; a photocell's conveyor, position, height, beam, thresholds and response time; a spawner's conveyor, rate, jitter, box size and position. Speeds and sensor settings apply while boxes keep running; changing a conveyor's place or size restarts the run. Ctrl+Z / Ctrl+Y undo and redo; dragging a slider is one step.
 
+**Control and I/O.** Every device is wired to addresses written as in soft_plc: a photocell to an input bit (`%IX0.0`), an actuator's valve to an output bit and its end sensors to input bits, a conveyor's encoder count to an input double word (`%ID8`) and, optionally, its motor to an output bit. New devices get the next free address; the inspector changes them. The **I/O** window lists every address with its live value. The **Control panel** has buttons (momentary or latching, normally open or normally closed) and lamps, each on an address. In the main panel, **program** picks what drives the outputs every 10 ms: nothing (actuators by hand, conveyors always running) or the **built-in sorting**: when an inspection sensor sees a bad box, a sorter notes the encoder count, fires the pusher once the belt has moved the set distance, and pulls it back when it's extended. **Add sorter** wires one to a sensor and a pusher and works out the distance from the layout. **Load the sorting demo** builds a whole sorting line (undoable). Spawners can make a share of their boxes bad (red), and a photocell can be set to see only bad boxes, as an inspection system would.
+
 **The main panel** runs simulated time: **Pause**, then **Step 1 ms** to watch a box move exactly speed x 1 ms per step, or a time scale of 0.1x to watch it in slow motion with exactly the same physics. **Restart** starts the run again.
 
 **The Triggers window** lists each time the selected photocell switched on: when the beam was covered and when the output switched (exact to a fraction of a millisecond), how far past the beam the box's front edge was then, the same as a PLC scanning every few milliseconds would see it, and the encoder count. A see-through box shows where the last triggered box was at its output time.
@@ -75,7 +77,7 @@ The scene is saved after every change; there's no Save button and the file isn't
 
 | Path | Contents |
 |---|---|
-| `src/sim/` | The simulation: Jolt set up for repeatable results (`physics.hpp`), conveyors, items and time (`world.hpp`), photocells and encoders (`sensors.hpp`), signals with exact switching times (`signal.hpp`), pneumatic actuators and bins (`actuators.hpp`); the scene, its snapping, editing and file (`scene.hpp`) |
+| `src/sim/` | The simulation: Jolt set up for repeatable results (`physics.hpp`), conveyors, items and time (`world.hpp`), photocells and encoders (`sensors.hpp`), signals with exact switching times (`signal.hpp`), pneumatic actuators and bins (`actuators.hpp`), the I/O image and addresses (`io.hpp`), control programs and the built-in sorter (`control.hpp`); the scene, its snapping, editing and file (`scene.hpp`) |
 | `src/edit/` | Undo and redo of the scene |
 | `src/render/` | What to draw and what a click hits (`scene.hpp`) and from where (`orbit_camera.hpp`), all plain geometry; the OpenGL renderer and shaders |
 | `src/app/` | The application: window, frame loop, panels |

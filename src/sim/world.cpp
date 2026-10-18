@@ -40,6 +40,9 @@ float reach(const glm::mat3& rotation, glm::vec3 half, glm::vec3 direction) {
 // conveyor index + 1 for conveyor belts.
 constexpr JPH::uint64 kConveyorTag = 1ULL << 32;
 
+// Bad (NOK) boxes are red, and the good ones never are.
+const glm::vec3 kNokColor{0.80F, 0.12F, 0.12F};
+
 // Pastel colours for boxes, so they're easy to tell apart.
 glm::vec3 boxColor(ItemId id) {
     static const glm::vec3 palette[] = {{0.85F, 0.55F, 0.30F},
@@ -234,7 +237,7 @@ std::size_t World::addStopper(const StopperSpec& spec) {
 }
 
 std::size_t World::addBin(const BinSpec& spec) {
-    Bin bin{spec, {}, 0, {}};
+    Bin bin{spec, {}, 0, 0, {}};
     for (const auto& wall : binWalls(spec, conveyors_.at(spec.conveyor).spec)) {
         bin.walls.push_back(addStatic(wall, 0.6F));
     }
@@ -298,7 +301,7 @@ std::size_t World::addSpawner(const SpawnerSpec& spec) {
     return spawners_.size() - 1;
 }
 
-ItemId World::spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading) {
+ItemId World::spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading, bool nok) {
     JPH::BodyCreationSettings settings(makeBox(toJolt(size / 2.0F)), JPH::RVec3(position.x, position.y, position.z),
                                        JPH::Quat::sRotation(JPH::Vec3::sAxisY(), heading), JPH::EMotionType::Dynamic,
                                        layers::kMoving);
@@ -308,7 +311,7 @@ ItemId World::spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, flo
     settings.mAllowSleeping = false;
     const auto body = physics_.bodies().CreateAndAddBody(settings, JPH::EActivation::Activate);
     const auto id = nextItemId_++;
-    items_.push_back(Item{id, body, size, color, -1.0});
+    items_.push_back(Item{id, body, size, color, -1.0, nok});
     return id;
 }
 
@@ -360,6 +363,9 @@ void World::run(double seconds) {
 
 void World::step() {
     const double stepStart = time();
+    if (stepCount_ % kScanSteps == 0) {
+        scan(stepStart);
+    }
     updateConveyors();
     updateActuators(stepStart, stepStart + kStep);
     updateSpawners();
@@ -368,6 +374,85 @@ void World::step() {
     ++stepCount_;
     updatePhotocells(stepStart, time()); // the world now is as it is at the end of the step
     updateBins();
+}
+
+void World::setPanel(const std::vector<ButtonSpec>& buttons, const std::vector<LampSpec>& lamps) {
+    buttons_ = buttons;
+    lamps_ = lamps;
+    pressed_.resize(buttons.size(), false);
+}
+
+void World::press(std::size_t button, bool down) {
+    if (button < pressed_.size()) {
+        pressed_[button] = down;
+    }
+}
+
+bool World::lit(std::size_t lamp) const {
+    if (lamp >= lamps_.size()) {
+        return false;
+    }
+    const auto address = parseAddress(lamps_[lamp].address);
+    return address && io_.bit(*address);
+}
+
+// One scan, as a PLC does it: read every input into the image, run the
+// program, apply its outputs. The outputs then hold until the next scan,
+// so a program that sets a valve at 1.230 s moves it from 1.230 s on.
+void World::scan(double time) {
+    // ---- Inputs: what the devices show now.
+    io_.inputs().fill(0);
+    const auto write = [&](const std::string& text, std::uint32_t value) {
+        if (const auto address = parseAddress(text); address && address->area == IoAddress::Area::Input) {
+            io_.setValue(*address, value);
+        }
+    };
+    for (const auto& photocell : photocells_) {
+        write(photocell.spec.input, photocell.output.value() ? 1U : 0U);
+    }
+    for (const auto& conveyor : conveyors_) {
+        write(conveyor.spec.encoderInput, static_cast<std::uint32_t>(conveyor.encoderCount())); // 32 bits, wrapping
+    }
+    const auto strokeInputs = [&](const auto& actuator) {
+        write(actuator.spec.extendedInput, actuator.stroke.extended().value() ? 1U : 0U);
+        write(actuator.spec.retractedInput, actuator.stroke.retracted().value() ? 1U : 0U);
+    };
+    std::for_each(pushers_.begin(), pushers_.end(), strokeInputs);
+    std::for_each(diverters_.begin(), diverters_.end(), strokeInputs);
+    std::for_each(stoppers_.begin(), stoppers_.end(), strokeInputs);
+    for (std::size_t i = 0; i < buttons_.size(); ++i) {
+        // A normally closed contact is closed (TRUE) while the button is NOT pressed.
+        write(buttons_[i].address, pressed(i) != buttons_[i].normallyClosed ? 1U : 0U);
+    }
+
+    if (!program_) {
+        for (auto& conveyor : conveyors_) {
+            conveyor.running = true;
+        }
+        return; // no program: nothing drives the outputs
+    }
+
+    // ---- The program.
+    program_->scan(io_, time);
+
+    // ---- Outputs: valves and motors follow the image.
+    const auto read = [&](const std::string& text) -> std::optional<bool> {
+        if (const auto address = parseAddress(text); address && address->area == IoAddress::Area::Output) {
+            return io_.bit(*address);
+        }
+        return std::nullopt;
+    };
+    const auto valve = [&](auto& actuator) {
+        if (const auto open = read(actuator.spec.valveOutput)) {
+            actuator.stroke.command(time, *open);
+        }
+    };
+    std::for_each(pushers_.begin(), pushers_.end(), valve);
+    std::for_each(diverters_.begin(), diverters_.end(), valve);
+    std::for_each(stoppers_.begin(), stoppers_.end(), valve);
+    for (auto& conveyor : conveyors_) {
+        conveyor.running = read(conveyor.spec.runOutput).value_or(true); // no run output: it always runs
+    }
 }
 
 // Each actuator's stroke moves through the step, and its body is told where
@@ -413,6 +498,7 @@ void World::updateBins() {
             if (in && std::find(bin.inside.begin(), bin.inside.end(), item.id) == bin.inside.end()) {
                 bin.inside.push_back(item.id);
                 ++bin.count;
+                bin.nokCount += item.nok ? 1 : 0;
             }
         }
     }
@@ -422,7 +508,8 @@ void World::updateBins() {
 void World::updateConveyors() {
     for (auto& conveyor : conveyors_) {
         const float maxChange = conveyor.spec.acceleration * static_cast<float>(kStep);
-        const float difference = conveyor.spec.targetSpeed - conveyor.speed;
+        const float target = conveyor.running ? conveyor.spec.targetSpeed : 0.0F; // stopped: ramps down
+        const float difference = target - conveyor.speed;
         conveyor.speed += std::clamp(difference, -maxChange, maxChange);
         conveyor.travelledBefore = conveyor.travelled;
         conveyor.travelled += conveyor.speed * kStep;
@@ -438,7 +525,13 @@ void World::updateSpawners() {
         }
         const auto& conveyor = conveyors_[spec.conveyor];
         const auto position = conveyor.beltPoint(spec.offset) + glm::vec3(0.0F, spec.size.y / 2.0F + 0.002F, 0.0F);
-        spawnItem(position, spec.size, boxColor(nextItemId_), conveyor.spec.heading);
+        // Bad boxes are chosen at random, from the same seeded generator: the
+        // same ones are bad every run.
+        std::uniform_real_distribution<float> chance(0.0F, 1.0F);
+        const bool nok = spec.nokFraction > 0.0F && chance(random_) < spec.nokFraction;
+        spawnItem(position, spec.size, nok ? kNokColor : boxColor(nextItemId_), conveyor.spec.heading, nok);
+        ++spawned_;
+        spawnedNok_ += nok ? 1 : 0;
 
         std::uniform_real_distribution<double> jitter(-spec.intervalJitter, spec.intervalJitter);
         state.nextSpawn += std::max(0.05, spec.interval + (spec.intervalJitter > 0.0 ? jitter(random_) : 0.0));
@@ -492,6 +585,9 @@ void World::updatePhotocells(double stepStart, double stepEnd) {
         std::vector<std::size_t> owners; // which item each interval belongs to
         for (std::size_t i = 0; i < items_.size(); ++i) {
             const auto& item = items_[i];
+            if (spec.onlyNok && !item.nok) {
+                continue; // an inspection sensor: good boxes don't trigger it
+            }
             const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
             const auto rotation = glm::mat3_cast(toGlm(bodies.GetRotation(item.body)));
             const auto half = item.size / 2.0F;
@@ -582,7 +678,7 @@ std::vector<ItemView> World::items() const {
     for (const auto& item : items_) {
         views.push_back(ItemView{item.id, toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))),
                                  toGlm(bodies.GetRotation(item.body)), item.size, item.color,
-                                 toGlm(bodies.GetLinearVelocity(item.body))});
+                                 toGlm(bodies.GetLinearVelocity(item.body)), item.nok});
     }
     return views;
 }
