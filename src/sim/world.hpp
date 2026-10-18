@@ -182,6 +182,7 @@ private:
     };
     struct SpawnerState {
         double nextSpawn = 0.0;
+        bool waiting = false; // its spot was taken when a box was due
     };
 
     class ConveyorContacts;

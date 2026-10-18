@@ -4,6 +4,7 @@
 #include "sim/world.hpp"
 #include <cstddef>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -36,8 +37,9 @@ struct PlacedConveyor {
 };
 
 // What drives the actuators and motors: nothing (they're moved by hand and
-// conveyors always run), or the built-in sorting program.
-enum class Control { Manual, BuiltInSorting };
+// conveyors always run), the built-in sorting program, soft_plc running an
+// ST program in lockstep with the simulation, or a live PLC over S7.
+enum class Control { Manual, BuiltInSorting, SoftPlc, S7Plc };
 
 struct Scene {
     std::vector<PlacedConveyor> conveyors;
@@ -52,6 +54,14 @@ struct Scene {
     std::vector<LampSpec> lamps;
     std::vector<SorterSpec> sorters;
     Control control = Control::Manual;
+    // soft_plc: the ST file it runs (relative to the scene file's folder, or
+    // absolute), and a port for monitoring connections (0: none), so
+    // ladder_editor or soft_plc_monitor can go online with it.
+    std::string plcProgram;
+    int monitorPort = 0;
+    // A live PLC over S7: where it is (soft_plc --s7, or a real S7, rack 0 slot 1).
+    std::string s7Host = "127.0.0.1";
+    int s7Port = 102;
 
     bool operator==(const Scene&) const = default;
 };
@@ -77,8 +87,21 @@ bool sameLayout(const Scene& a, const Scene& b);
 // bin, and the built-in sorter wired to them.
 Scene sortingDemo();
 
-// The control program the scene asks for (null for manual control).
+// The control program the scene asks for: null for manual control, the
+// built-in sorting, or null for the PLC kinds (the PLC link, in factory_sim_plc,
+// makes those: see plc/programs.hpp).
 std::unique_ptr<ControlProgram> makeProgram(const Scene& scene);
+using ProgramMaker = std::function<std::unique_ptr<ControlProgram>(const Scene&)>;
+
+// Whether two scenes ask for the same control program, set up the same way:
+// if not, a running world needs a new one.
+bool sameControl(const Scene& a, const Scene& b);
+
+// The line from ladder_editor's conveyor example, wired to its addresses: a
+// belt whose motor is %QX0.0, light barriers at the start (%IX0.3) and the
+// end (%IX0.4), Start, Stop, E-stop and Reset buttons, the program's lamps,
+// and soft_plc running `program` (its ST export).
+Scene conveyorDemo(std::string program);
 
 // The first free address of a kind, as soft_plc writes it: the first input
 // or output bit not used by any device, button or lamp ("%IX0.3"), or the
@@ -91,8 +114,9 @@ std::string freeAddress(const Scene& scene, IoAddress::Area area, IoAddress::Siz
 // from the layout (see the comment in scene.cpp).
 SorterSpec sorterFor(const Scene& scene, std::size_t photocell, std::size_t pusher);
 
-// A new world for the scene (no boxes yet, time 0).
-std::unique_ptr<World> buildWorld(const Scene& scene);
+// A new world for the scene (no boxes yet, time 0), controlled by the program
+// `make` gives (by default, makeProgram).
+std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make = makeProgram);
 
 // Gives a running world the scene's settings (speeds, sensors, spawners),
 // keeping its boxes and time. Only for a scene with the same layout as the

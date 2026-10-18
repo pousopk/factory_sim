@@ -11,3 +11,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 3. Building the line | [03-building-the-line.md](03-building-the-line.md) |
 | 4. Transfers and actuators | [04-actuators.md](04-actuators.md) |
 | 5. I/O and control | [05-control.md](05-control.md) |
+| 6. A PLC controls the line | [06-plc-link.md](06-plc-link.md) |

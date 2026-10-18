@@ -1,0 +1,122 @@
+{
+  "bins": [],
+  "buttons": [
+    {
+      "address": "%IX0.0",
+      "latching": false,
+      "name": "Start",
+      "normallyClosed": false
+    },
+    {
+      "address": "%IX0.1",
+      "latching": false,
+      "name": "Stop",
+      "normallyClosed": true
+    },
+    {
+      "address": "%IX0.2",
+      "latching": true,
+      "name": "E-stop",
+      "normallyClosed": true
+    },
+    {
+      "address": "%IX0.5",
+      "latching": false,
+      "name": "Reset",
+      "normallyClosed": false
+    }
+  ],
+  "control": "soft_plc",
+  "conveyors": [
+    {
+      "acceleration": 1.0,
+      "beltHeight": 0.800000011920929,
+      "encoder": {
+        "pulsesPerRevolution": 1024,
+        "rollerDiameter": 0.05000000074505806
+      },
+      "encoderInput": "%ID8",
+      "guideLeft": false,
+      "guideRight": false,
+      "heading": 0.0,
+      "length": 4.0,
+      "name": "C1",
+      "runOutput": "%QX0.0",
+      "start": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "targetSpeed": 0.5,
+      "width": 0.4000000059604645
+    }
+  ],
+  "diverters": [],
+  "format": 1,
+  "lamps": [
+    {
+      "address": "%QX0.0",
+      "name": "Motor"
+    },
+    {
+      "address": "%QX0.1",
+      "name": "Jam"
+    },
+    {
+      "address": "%QX0.2",
+      "name": "Batch full"
+    },
+    {
+      "address": "%QX0.3",
+      "name": "Too fast"
+    }
+  ],
+  "monitorPort": 5020,
+  "photocells": [
+    {
+      "along": 0.6000000238418579,
+      "beamDiameter": 0.00800000037997961,
+      "conveyor": 0,
+      "height": 0.05000000074505806,
+      "input": "%IX0.3",
+      "name": "boxAtStart",
+      "offFraction": 0.4000000059604645,
+      "onFraction": 0.6000000238418579,
+      "onlyNok": false,
+      "responseTime": 0.001
+    },
+    {
+      "along": 3.700000047683716,
+      "beamDiameter": 0.00800000037997961,
+      "conveyor": 0,
+      "height": 0.05000000074505806,
+      "input": "%IX0.4",
+      "name": "boxAtEnd",
+      "offFraction": 0.4000000059604645,
+      "onFraction": 0.6000000238418579,
+      "onlyNok": false,
+      "responseTime": 0.001
+    }
+  ],
+  "plcProgram": "conveyor.st",
+  "pushers": [],
+  "s7Host": "127.0.0.1",
+  "s7Port": 102,
+  "sorters": [],
+  "spawners": [
+    {
+      "conveyor": 0,
+      "enabled": true,
+      "interval": 2.5,
+      "intervalJitter": 0.0,
+      "nokFraction": 0.0,
+      "offset": 0.20000000298023224,
+      "size": [
+        0.20000000298023224,
+        0.15000000596046448,
+        0.20000000298023224
+      ]
+    }
+  ],
+  "stoppers": []
+}

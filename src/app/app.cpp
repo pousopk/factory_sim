@@ -1,4 +1,7 @@
 #include "app/app.hpp"
+#include "plc/programs.hpp"
+#include "plc/s7_link.hpp"
+#include "plc/soft_plc_program.hpp"
 #include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
@@ -95,8 +98,25 @@ App::App(std::filesystem::path scenePath) : scenePath_(std::move(scenePath)), hi
             fileStatus_ = loaded.error() + " (kept as " + aside.filename().string() + "; starting a new scene)";
         }
     }
+    rebuildWorld();
+}
+
+void App::rebuildWorld() {
+    world_.reset();
+    programError_.clear();
+    world_ = buildWorld(scene(), [this](const Scene& s) {
+        auto made = makeAnyProgram(s, scenePath_.parent_path());
+        programError_ = made.error;
+        return std::move(made.program);
+    });
     applied_ = scene();
-    world_ = buildWorld(applied_);
+}
+
+void App::replaceProgram() {
+    world_->setProgram(nullptr);
+    auto made = makeAnyProgram(scene(), scenePath_.parent_path());
+    programError_ = made.error;
+    world_->setProgram(std::move(made.program));
 }
 
 void App::frame(double realSeconds, int width, int height) {
@@ -108,6 +128,7 @@ void App::frame(double realSeconds, int width, int height) {
     drawTriggers();
     drawIoTable();
     drawControlPanel();
+    drawPlcVariables();
 
     // An edit is finished when no widget is being used: then it's one undo step, saved at once.
     if (!ImGui::IsAnyItemActive() && history_.commit()) {
@@ -137,18 +158,17 @@ void App::followScene() {
         applyLive(*world_, scene()); // the boxes keep running
         // A new program (or a sorter set up differently) starts from scratch;
         // the boxes keep running meanwhile.
-        if (scene().control != applied_.control || scene().sorters != applied_.sorters) {
-            world_->setProgram(makeProgram(scene()));
+        if (!sameControl(scene(), applied_)) {
+            replaceProgram();
         }
+        applied_ = scene();
     } else {
-        world_ = buildWorld(scene()); // something moved: the run starts again
+        rebuildWorld(); // something moved: the run starts again
     }
-    applied_ = scene();
 }
 
 void App::restartRun() {
-    world_ = buildWorld(scene());
-    applied_ = scene();
+    rebuildWorld();
 }
 
 // ---------------------------------------------------------------- Input
@@ -899,13 +919,13 @@ void App::drawBinInspector(std::size_t index) {
 void App::drawControl() {
     ImGui::SeparatorText("Control");
     auto& s = scene();
-    int control = s.control == Control::BuiltInSorting ? 1 : 0;
+    int control = static_cast<int>(s.control);
     ImGui::SetNextItemWidth(kFieldWidth);
-    if (ImGui::Combo("program", &control, "none (by hand)\0built-in sorting\0")) {
-        s.control = control == 1 ? Control::BuiltInSorting : Control::Manual;
+    if (ImGui::Combo("program", &control, "none (by hand)\0built-in sorting\0soft_plc (lockstep)\0S7 PLC (live)\0")) {
+        s.control = static_cast<Control>(control);
     }
-    ImGui::SetItemTooltip("What drives the valves and motors, scan by scan (every 10 ms), through the I/O.\n"
-                          "Milestone 6 adds soft_plc.");
+    ImGui::SetItemTooltip("What drives the valves and motors, scan by scan (every 10 ms), through the I/O:\n"
+                          "soft_plc runs an ST program in step with the simulation; an S7 PLC runs on its own.");
     ImGui::TextColored(kDim, "%zu boxes made, %zu bad", world_->spawned(), world_->spawnedNok());
     if (ImGui::SmallButton("Load the sorting demo")) {
         s = sortingDemo(); // one undo step, like any other change
@@ -913,6 +933,23 @@ void App::drawControl() {
     }
     ImGui::SetItemTooltip("A conveyor, a third of the boxes bad, an inspection sensor, a pusher, a bin,\n"
                           "and the built-in sorter wired to them. Ctrl+Z brings your scene back.");
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Load the conveyor demo")) {
+        s = conveyorDemo(FACTORY_SIM_EXAMPLES_DIR "/conveyor.st");
+        s.monitorPort = 5020;
+        selected_.reset();
+    }
+    ImGui::SetItemTooltip("ladder_editor's conveyor program, run by soft_plc, on a line wired to its addresses.\n"
+                          "Press Start on the control panel. ladder_editor can go online with --connect=5020.");
+    if (!programError_.empty()) {
+        ImGui::PushTextWrapPos(0.0F);
+        ImGui::TextColored(kProblem, "%s", programError_.c_str());
+        ImGui::PopTextWrapPos();
+    }
+    if (s.control == Control::SoftPlc || s.control == Control::S7Plc) {
+        drawPlcStatus();
+        return;
+    }
 
     if (s.control != Control::BuiltInSorting) {
         return;
@@ -1152,6 +1189,99 @@ void App::drawControlPanel() {
             s.lamps.push_back(LampSpec{fmt::format("H{}", s.lamps.size() + 1),
                                        freeAddress(s, IoAddress::Area::Output, IoAddress::Size::Bit)});
         }
+    }
+    ImGui::End();
+}
+
+// ---------------------------------------------------------------- PLC
+
+void App::drawPlcStatus() {
+    auto& s = scene();
+    if (s.control == Control::SoftPlc) {
+        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::InputTextWithHint("ST file", "conveyor.st", &s.plcProgram);
+        ImGui::SetItemTooltip("The Structured Text soft_plc runs (ladder_editor's Export ST writes one).\n"
+                              "A relative path is relative to the scene file's folder.");
+        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::InputInt("monitor port", &s.monitorPort, 0);
+        s.monitorPort = std::clamp(s.monitorPort, 0, 65535);
+        ImGui::SetItemTooltip("0: none. Otherwise ladder_editor --connect=PORT (or soft_plc_monitor) goes online\n"
+                              "with the program running here: values, forcing, Download.");
+        if (ImGui::SmallButton("Reload the file")) {
+            replaceProgram(); // a fresh start of the program; the line keeps running
+        }
+        ImGui::SetItemTooltip("Read the ST file again and start it afresh (its values start over).\n"
+                              "To keep them, Download from ladder_editor instead: that's an online change.");
+        if (const auto* plc = dynamic_cast<const SoftPlcProgram*>(world_->program())) {
+            const auto status = plc->status();
+            ImGui::TextColored(status.running ? ImVec4(0.45F, 0.85F, 0.50F, 1.0F) : kProblem, "%s",
+                               status.running ? "RUN" : "STOP");
+            ImGui::SameLine();
+            ImGui::TextColored(kDim, "%llu cycles, last %.0f µs", static_cast<unsigned long long>(status.cycles),
+                               status.lastCycleMicroseconds);
+            if (!status.error.empty()) {
+                ImGui::PushTextWrapPos(0.0F);
+                ImGui::TextColored(kProblem, "%s", status.error.c_str());
+                ImGui::PopTextWrapPos();
+            }
+            if (status.monitorPort != 0) {
+                ImGui::TextColored(kDim, "online: ladder_editor --connect=%u", status.monitorPort);
+            }
+        }
+    } else {
+        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::InputText("host", &s.s7Host);
+        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::InputInt("S7 port", &s.s7Port, 0);
+        s.s7Port = std::clamp(s.s7Port, 1, 65535);
+        ImGui::SetItemTooltip("102 for a real S7; soft_plc --s7=PORT for another (no rights needed above 1023)");
+        if (const auto* link = dynamic_cast<const S7Link*>(world_->program())) {
+            const auto status = link->status();
+            ImGui::TextColored(status.connected ? ImVec4(0.45F, 0.85F, 0.50F, 1.0F) : kProblem, "%s",
+                               status.connected ? "connected" : "not connected");
+            ImGui::SameLine();
+            ImGui::TextColored(kDim, "%llu exchanges, last %.0f µs", static_cast<unsigned long long>(status.exchanges),
+                               status.lastRoundTripMicroseconds);
+            if (!status.connected && !status.error.empty()) {
+                ImGui::TextColored(kProblem, "%s", status.error.c_str());
+            }
+        }
+        if (timeScale_ != 1.0F || paused_) {
+            ImGui::TextColored(kProblem, "A live PLC runs in real time: set the time scale to 1x.");
+        }
+    }
+}
+
+// soft_plc's variables, live: everything the program has, as it has it.
+void App::drawPlcVariables() {
+    const auto* plc = dynamic_cast<const SoftPlcProgram*>(world_->program());
+    if (plc == nullptr) {
+        return;
+    }
+    ImGui::SetNextWindowPos(ImVec2(360, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(330, 300), ImGuiCond_FirstUseEver);
+    ImGui::Begin("PLC variables");
+    ImGui::SetNextItemWidth(-1.0F);
+    ImGui::InputTextWithHint("##filter", "filter: part of a name", &variableFilter_);
+    if (ImGui::BeginTable("variables", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {
+        ImGui::TableSetupScrollFreeze(0, 1);
+        ImGui::TableSetupColumn("variable");
+        ImGui::TableSetupColumn("type", ImGuiTableColumnFlags_WidthFixed, 45.0F);
+        ImGui::TableSetupColumn("value", ImGuiTableColumnFlags_WidthFixed, 80.0F);
+        ImGui::TableHeadersRow();
+        for (const auto& variable : plc->variables()) {
+            if (!variableFilter_.empty() && variable.path.find(variableFilter_) == std::string::npos) {
+                continue;
+            }
+            ImGui::TableNextRow();
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(variable.path.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextColored(kDim, "%s", variable.type.c_str());
+            ImGui::TableNextColumn();
+            ImGui::TextUnformatted(variable.value.c_str());
+        }
+        ImGui::EndTable();
     }
     ImGui::End();
 }

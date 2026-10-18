@@ -179,3 +179,17 @@ TEST_CASE("A signal keeps its exact switching times") {
     CHECK(signal.valueAt(0.02));
     CHECK_FALSE(signal.valueAt(0.03));
 }
+
+TEST_CASE("An infeed waits for a gap: a stopped belt gets one box, not a pile") {
+    World world;
+    auto spec = belt(0.0F); // stopped
+    world.addConveyor(spec);
+    SpawnerSpec spawner;
+    spawner.interval = 0.5;
+    world.addSpawner(spawner);
+    world.run(5.0);
+    CHECK(world.itemCount() == 1);
+    world.conveyors()[0].spec.targetSpeed = 0.5F; // the belt starts: the next box comes once there's room
+    world.run(2.0);
+    CHECK(world.itemCount() >= 3);
+}

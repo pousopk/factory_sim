@@ -53,6 +53,12 @@ private:
     void drawIoTable();
     void drawControlPanel();
     void drawControl(); // the control section of the main panel
+    void drawPlcStatus();
+    void drawPlcVariables();
+    // A new world (or program) for the scene, the PLC kinds included. The old
+    // one goes first: its soft_plc may hold the monitoring port the new one needs.
+    void rebuildWorld();
+    void replaceProgram();
     void followScene(); // the world catches up with the scene
     void restartRun();  // a new world from the scene: no boxes, time 0
     void deleteSelected();
@@ -71,6 +77,8 @@ private:
     OrbitCamera camera_;
     Renderer renderer_;
     std::string fileStatus_;
+    std::string programError_; // why the scene's control program couldn't start
+    std::string variableFilter_;
 
     bool paused_ = false;
     float timeScale_ = 1.0F;

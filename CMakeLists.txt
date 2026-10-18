@@ -101,6 +101,21 @@ target_link_libraries(factory_sim_core
   PRIVATE fmt::fmt nlohmann_json::nlohmann_json
 )
 
+# --- soft_plc: the PLC that can control the line (milestone 6) ---
+# Used from source, next to factory_sim (or set -DFACTORY_SIM_SOFT_PLC_DIR=...).
+set(FACTORY_SIM_SOFT_PLC_DIR "${CMAKE_SOURCE_DIR}/../soft_plc" CACHE PATH "Where soft_plc's sources are")
+add_subdirectory(${FACTORY_SIM_SOFT_PLC_DIR} soft_plc EXCLUDE_FROM_ALL)
+
+# The PLC link: soft_plc running in lockstep with the simulation, or a live
+# PLC over S7. Its headers name no soft_plc or Snap7 types: those stay inside.
+add_library(factory_sim_plc STATIC
+  src/plc/soft_plc_program.cpp
+  src/plc/s7_link.cpp
+  src/plc/programs.cpp
+)
+target_include_directories(factory_sim_plc PUBLIC src)
+target_link_libraries(factory_sim_plc PUBLIC factory_sim_core PRIVATE soft_plc_core snap7_static fmt::fmt)
+
 # --- What to draw and where from: plain geometry, no OpenGL, so it's tested too ---
 add_library(factory_sim_view STATIC
   src/render/scene.cpp
@@ -142,7 +157,8 @@ if(FACTORY_SIM_BUILD_APP)
     src/render/shader.cpp
     src/render/renderer.cpp
   )
-  target_link_libraries(factory_sim PRIVATE factory_sim_view implot imgui fmt::fmt OpenGL::GL)
+  target_link_libraries(factory_sim PRIVATE factory_sim_view factory_sim_plc implot imgui fmt::fmt OpenGL::GL)
+  target_compile_definitions(factory_sim PRIVATE FACTORY_SIM_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/examples")
 endif()
 
 enable_testing()

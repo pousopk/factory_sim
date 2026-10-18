@@ -48,7 +48,7 @@ ctest --test-dir build --output-on-failure
 ./build/factory_sim
 ```
 
-The first configure downloads its dependencies (Jolt Physics, glm, Dear ImGui, ImPlot, {fmt}, doctest). The application needs GLFW and OpenGL 3.3 development files (`libglfw3-dev`, `libgl-dev`); without them, configure with `-DFACTORY_SIM_BUILD_APP=OFF` to build the simulation and its tests only. For smooth frame rates, build Release (`-DCMAKE_BUILD_TYPE=Release`): the sanitizers make the Debug build several times slower.
+The first configure downloads its dependencies (Jolt Physics, glm, Dear ImGui, ImPlot, {fmt}, nlohmann/json, tl::expected, doctest), and uses `soft_plc` from `../soft_plc` next to it (or `-DFACTORY_SIM_SOFT_PLC_DIR=...`), which brings Snap7. The application needs GLFW and OpenGL 3.3 development files (`libglfw3-dev`, `libgl-dev`); without them, configure with `-DFACTORY_SIM_BUILD_APP=OFF` to build the simulation and its tests only. For smooth frame rates, build Release (`-DCMAKE_BUILD_TYPE=Release`): the sanitizers make the Debug build several times slower.
 
 ## Using it
 
@@ -69,6 +69,8 @@ The scene is saved after every change; there's no Save button and the file isn't
 
 **Control and I/O.** Every device is wired to addresses written as in soft_plc: a photocell to an input bit (`%IX0.0`), an actuator's valve to an output bit and its end sensors to input bits, a conveyor's encoder count to an input double word (`%ID8`) and, optionally, its motor to an output bit. New devices get the next free address; the inspector changes them. The **I/O** window lists every address with its live value. The **Control panel** has buttons (momentary or latching, normally open or normally closed) and lamps, each on an address. In the main panel, **program** picks what drives the outputs every 10 ms: nothing (actuators by hand, conveyors always running) or the **built-in sorting**: when an inspection sensor sees a bad box, a sorter notes the encoder count, fires the pusher once the belt has moved the set distance, and pulls it back when it's extended. **Add sorter** wires one to a sensor and a pusher and works out the distance from the layout. **Load the sorting demo** builds a whole sorting line (undoable). Spawners can make a share of their boxes bad (red), and a photocell can be set to see only bad boxes, as an inspection system would.
 
+**A PLC in control.** With **soft_plc (lockstep)**, soft_plc runs an ST file (ladder_editor's **Export ST** writes one) as the control program: every 10 ms scan is one soft_plc cycle on the *simulated* clock, so timers keep up at any time scale and every run gives the same result. With a **monitor port**, ladder_editor goes online with it (`ladder_editor --connect=5020 project`): power flow on the rungs while the simulated line runs, values, forcing, and **Download**, which changes the running program without stopping it. With **S7 PLC (live)**, a PLC running on its own (`soft_plc --s7=1102 program.st`, or a real S7) controls the line over S7: the simulator writes its inputs and reads its outputs every scan, in real time. **Load the conveyor demo** (or `./build/factory_sim examples/conveyor_line.json`) runs ladder_editor's conveyor example on a line wired to its addresses: press **Start** on the control panel.
+
 **The main panel** runs simulated time: **Pause**, then **Step 1 ms** to watch a box move exactly speed x 1 ms per step, or a time scale of 0.1x to watch it in slow motion with exactly the same physics. **Restart** starts the run again.
 
 **The Triggers window** lists each time the selected photocell switched on: when the beam was covered and when the output switched (exact to a fraction of a millisecond), how far past the beam the box's front edge was then, the same as a PLC scanning every few milliseconds would see it, and the encoder count. A see-through box shows where the last triggered box was at its output time.
@@ -79,6 +81,8 @@ The scene is saved after every change; there's no Save button and the file isn't
 |---|---|
 | `src/sim/` | The simulation: Jolt set up for repeatable results (`physics.hpp`), conveyors, items and time (`world.hpp`), photocells and encoders (`sensors.hpp`), signals with exact switching times (`signal.hpp`), pneumatic actuators and bins (`actuators.hpp`), the I/O image and addresses (`io.hpp`), control programs and the built-in sorter (`control.hpp`); the scene, its snapping, editing and file (`scene.hpp`) |
 | `src/edit/` | Undo and redo of the scene |
+| `src/plc/` | The PLC link: soft_plc in lockstep (`soft_plc_program.hpp`), a live PLC over S7 (`s7_link.hpp`) |
+| `examples/` | The conveyor line and ladder_editor's conveyor program exported to ST |
 | `src/render/` | What to draw and what a click hits (`scene.hpp`) and from where (`orbit_camera.hpp`), all plain geometry; the OpenGL renderer and shaders |
 | `src/app/` | The application: window, frame loop, panels |
 | `tests/` | doctest unit tests, mirroring `src/`; they run the simulation headless |

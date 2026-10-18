@@ -525,6 +525,21 @@ void World::updateSpawners() {
         }
         const auto& conveyor = conveyors_[spec.conveyor];
         const auto position = conveyor.beltPoint(spec.offset) + glm::vec3(0.0F, spec.size.y / 2.0F + 0.002F, 0.0F);
+        // An infeed waits for a gap: if a box is still where the new one would
+        // go (the belt has stopped, or boxes are queueing back to here), it
+        // waits, and the rhythm starts again from when it can put it down.
+        const auto along = conveyor.direction();
+        const auto& bodies = physics_.bodies();
+        const bool occupied = std::any_of(items_.begin(), items_.end(), [&](const Item& item) {
+            const auto offset = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))) - position;
+            return std::abs(glm::dot(offset, along)) < (spec.size.x + item.size.x) / 2.0F + 0.01F &&
+                   std::abs(offset.y) < spec.size.y &&
+                   std::abs(glm::dot(offset, leftOf(along))) < conveyor.spec.width / 2.0F;
+        });
+        if (occupied) {
+            state.waiting = true;
+            continue;
+        }
         // Bad boxes are chosen at random, from the same seeded generator: the
         // same ones are bad every run.
         std::uniform_real_distribution<float> chance(0.0F, 1.0F);
@@ -534,7 +549,9 @@ void World::updateSpawners() {
         spawnedNok_ += nok ? 1 : 0;
 
         std::uniform_real_distribution<double> jitter(-spec.intervalJitter, spec.intervalJitter);
-        state.nextSpawn += std::max(0.05, spec.interval + (spec.intervalJitter > 0.0 ? jitter(random_) : 0.0));
+        const double from = state.waiting ? time() : state.nextSpawn;
+        state.waiting = false;
+        state.nextSpawn = from + std::max(0.05, spec.interval + (spec.intervalJitter > 0.0 ? jitter(random_) : 0.0));
     }
 }
 

@@ -119,6 +119,50 @@ Scene sortingDemo() {
     return scene;
 }
 
+bool sameControl(const Scene& a, const Scene& b) {
+    return a.control == b.control && a.sorters == b.sorters && a.plcProgram == b.plcProgram &&
+           a.monitorPort == b.monitorPort && a.s7Host == b.s7Host && a.s7Port == b.s7Port;
+}
+
+Scene conveyorDemo(std::string program) {
+    Scene scene;
+    PlacedConveyor conveyor;
+    conveyor.spec.name = "C1";
+    conveyor.spec.length = 4.0F;
+    conveyor.spec.targetSpeed = 0.5F;
+    conveyor.spec.runOutput = "%QX0.0"; // the program's motor output
+    conveyor.spec.encoderInput = "%ID8";
+    scene.conveyors.push_back(conveyor);
+    SpawnerSpec spawner;
+    spawner.interval = 2.5;
+    scene.spawners.push_back(spawner);
+    PhotocellSpec atStart;
+    atStart.name = "boxAtStart";
+    atStart.along = 0.6F;
+    atStart.input = "%IX0.3";
+    scene.photocells.push_back(atStart);
+    PhotocellSpec atEnd;
+    atEnd.name = "boxAtEnd";
+    atEnd.along = 3.7F;
+    atEnd.input = "%IX0.4";
+    scene.photocells.push_back(atEnd);
+    scene.buttons = {
+        ButtonSpec{"Start", "%IX0.0", false, false},
+        ButtonSpec{"Stop", "%IX0.1", true, false},  // wired normally closed
+        ButtonSpec{"E-stop", "%IX0.2", true, true}, // normally closed, and it stays pressed
+        ButtonSpec{"Reset", "%IX0.5", false, false},
+    };
+    scene.lamps = {
+        LampSpec{"Motor", "%QX0.0"},
+        LampSpec{"Jam", "%QX0.1"},
+        LampSpec{"Batch full", "%QX0.2"},
+        LampSpec{"Too fast", "%QX0.3"},
+    };
+    scene.control = Control::SoftPlc;
+    scene.plcProgram = std::move(program);
+    return scene;
+}
+
 std::unique_ptr<ControlProgram> makeProgram(const Scene& scene) {
     if (scene.control == Control::BuiltInSorting) {
         return std::make_unique<BuiltInSorting>(scene.sorters);
@@ -279,7 +323,7 @@ bool sameLayout(const Scene& a, const Scene& b) {
     return true;
 }
 
-std::unique_ptr<World> buildWorld(const Scene& scene) {
+std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make) {
     auto world = std::make_unique<World>();
     for (const auto& spec : placeConveyors(scene)) {
         world->addConveyor(spec);
@@ -314,7 +358,7 @@ std::unique_ptr<World> buildWorld(const Scene& scene) {
             world->addBin(bin);
     }
     world->setPanel(scene.buttons, scene.lamps);
-    world->setProgram(makeProgram(scene));
+    world->setProgram(make(scene));
     return world;
 }
 
@@ -535,6 +579,29 @@ template <class Spec> void ioFromJson(const json& j, Spec& s) {
     s.retractedInput = j.value("retractedInput", std::string());
 }
 
+const char* controlName(Control control) {
+    switch (control) {
+    case Control::BuiltInSorting:
+        return "built-in sorting";
+    case Control::SoftPlc:
+        return "soft_plc";
+    case Control::S7Plc:
+        return "S7 PLC";
+    case Control::Manual:
+        break;
+    }
+    return "manual";
+}
+
+Control controlFrom(const std::string& name) {
+    for (const auto control : {Control::BuiltInSorting, Control::SoftPlc, Control::S7Plc}) {
+        if (name == controlName(control)) {
+            return control;
+        }
+    }
+    return Control::Manual;
+}
+
 const char* sideName(Side side) {
     return side == Side::Left ? "left" : "right";
 }
@@ -653,7 +720,11 @@ std::string sceneToJson(const Scene& scene) {
                                    {"extendedInput", s.extendedInput},
                                    {"distance", s.distance}});
     }
-    data["control"] = scene.control == Control::BuiltInSorting ? "built-in sorting" : "manual";
+    data["control"] = controlName(scene.control);
+    data["plcProgram"] = scene.plcProgram;
+    data["monitorPort"] = scene.monitorPort;
+    data["s7Host"] = scene.s7Host;
+    data["s7Port"] = scene.s7Port;
     return data.dump(2) + "\n";
 }
 
@@ -812,8 +883,11 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             s.distance = j.value("distance", s.distance);
             scene.sorters.push_back(s);
         }
-        scene.control = data.value("control", std::string("manual")) == "built-in sorting" ? Control::BuiltInSorting
-                                                                                           : Control::Manual;
+        scene.control = controlFrom(data.value("control", std::string("manual")));
+        scene.plcProgram = data.value("plcProgram", std::string());
+        scene.monitorPort = data.value("monitorPort", 0);
+        scene.s7Host = data.value("s7Host", scene.s7Host);
+        scene.s7Port = data.value("s7Port", scene.s7Port);
         return scene;
     } catch (const json::exception& error) {
         return tl::unexpected(std::string("the scene file isn't valid: ") + error.what());
