@@ -657,6 +657,55 @@ Scene equipmentDemo(std::string program) {
     return scene;
 }
 
+Scene cameraDemo() {
+    Scene scene;
+    PlacedConveyor belt;
+    belt.spec.name = "C1";
+    belt.spec.length = 4.0F;
+    belt.spec.targetSpeed = 0.5F;
+    belt.spec.encoderInput = "%ID8";
+    scene.conveyors.push_back(belt);
+    SpawnerSpec boxes;
+    boxes.size = {0.16F, 0.08F, 0.12F};
+    boxes.heightJitter = 0.03F;
+    boxes.interval = 1.3;
+    boxes.nokFraction = 0.25F;
+    boxes.atBeltSpeed = true;
+    scene.spawners.push_back(boxes);
+    SpawnerSpec tins;
+    tins.shape = Shape::Tin;
+    tins.size = {0.073F, 0.11F, 0.073F};
+    tins.interval = 2.1;
+    tins.atBeltSpeed = true;
+    scene.spawners.push_back(tins);
+    // K1: a line-scan camera, 512 pixels over 0.45 m (0.88 mm each),
+    // a line every 6 encoder pulses (6519 pulses/m: 0.92 mm), so nearly
+    // square pixels whatever the belt's speed.
+    const auto k1 = addCamera(scene, 0);
+    auto& line = scene.cameras[k1];
+    line.name = "K1";
+    line.kind = CameraKind::Line;
+    line.along = 1.6F;
+    line.lineWidth = 0.45F;
+    line.pixelsAcross = 512;
+    line.lineTrigger = LineTrigger::Encoder;
+    line.pulsesPerLine = 6;
+    line.exposure = 0.0001;
+    line.noise = 3.0F;
+    // K2: an area camera looking down further on, 1280 x 1024 over 0.3 m.
+    const auto k2 = addCamera(scene, 0);
+    auto& area = scene.cameras[k2];
+    area.name = "K2";
+    area.along = 2.8F;
+    area.fieldOfView = 0.3F;
+    area.pixels = 1280;
+    area.pixelsAcross = 1024;
+    area.workingDistance = 0.5F;
+    area.exposure = 0.002; // 2 ms at 0.5 m/s: 1 mm, about 4 pixels of blur
+    area.noise = 4.0F;
+    return scene;
+}
+
 Scene mergeDemo(std::string program) {
     Scene scene;
     PlacedConveyor main;
@@ -1233,7 +1282,15 @@ std::string sceneToJson(const Scene& scene) {
                                    {"exposure", c.exposure},
                                    {"readout", c.readout},
                                    {"triggerOutput", c.triggerOutput},
-                                   {"readyInput", c.readyInput}});
+                                   {"readyInput", c.readyInput},
+                                   {"kind", c.kind == CameraKind::Line ? "line" : "area"},
+                                   {"pixelsAcross", c.pixelsAcross},
+                                   {"workingDistance", c.workingDistance},
+                                   {"noise", c.noise},
+                                   {"lineWidth", c.lineWidth},
+                                   {"lineTrigger", c.lineTrigger == LineTrigger::Encoder ? "encoder" : "free run"},
+                                   {"lineRate", c.lineRate},
+                                   {"pulsesPerLine", c.pulsesPerLine}});
     }
     data["proximities"] = json::array();
     for (const auto& p : scene.proximities) {
@@ -1499,6 +1556,15 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             c.readout = j.value("readout", c.readout);
             c.triggerOutput = j.value("triggerOutput", std::string());
             c.readyInput = j.value("readyInput", std::string());
+            c.kind = j.value("kind", std::string("area")) == "line" ? CameraKind::Line : CameraKind::Area;
+            c.pixelsAcross = j.value("pixelsAcross", c.pixelsAcross);
+            c.workingDistance = j.value("workingDistance", c.workingDistance);
+            c.noise = j.value("noise", c.noise);
+            c.lineWidth = j.value("lineWidth", c.lineWidth);
+            c.lineTrigger = j.value("lineTrigger", std::string("free run")) == "encoder" ? LineTrigger::Encoder
+                                                                                         : LineTrigger::FreeRun;
+            c.lineRate = j.value("lineRate", c.lineRate);
+            c.pulsesPerLine = j.value("pulsesPerLine", c.pulsesPerLine);
             if (auto ok = checkConveyor(c.conveyor, "camera " + c.name); !ok) {
                 return tl::unexpected(ok.error());
             }

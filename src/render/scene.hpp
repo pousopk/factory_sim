@@ -105,6 +105,19 @@ struct Label {
     Pick pick; // what it names
 };
 
+// How an area camera sees: from its working distance and tilt, looking at the
+// middle of its field of view, the picture's x along the travel, its lens
+// angle set by the field of view and the pixels. `width` x `height`: the size
+// to draw it at, the camera's shape scaled to at most `maxSize`.
+struct CameraView {
+    glm::mat4 view{1.0F};
+    glm::mat4 projection{1.0F};
+    glm::vec3 eye{0.0F};
+    int width = 0;
+    int height = 0;
+};
+CameraView cameraView(const CameraSpec& spec, const Conveyor& conveyor, int maxSize = 640);
+
 // A label for every named device in the world: conveyors (over the middle
 // of the belt), photocells, proximity switches, lasers, light curtains,
 // actuators, bins and cameras, each just above its own parts.

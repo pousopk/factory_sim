@@ -154,6 +154,11 @@ void App::drawMenuBar() {
             }
             ImGui::SetItemTooltip("Boxes of different heights and tins past an inductive and a capacitive\n"
                                   "proximity switch, a laser measuring heights, and a light curtain");
+            if (ImGui::MenuItem("Line-scan and area cameras")) {
+                startNew(cameraDemo());
+            }
+            ImGui::SetItemTooltip("A line-scan camera on the encoder and an area camera over one belt:\n"
+                                  "open View > Camera view");
             if (ImGui::MenuItem("Tins and cameras")) {
                 startNew(tinDemo());
             }
@@ -221,6 +226,7 @@ void App::drawMenuBar() {
         ImGui::MenuItem("Control panel", nullptr, &showControlPanel_);
         ImGui::MenuItem("PLC variables", nullptr, &showPlcVariables_);
         ImGui::MenuItem("Cameras", nullptr, &showCameras_);
+        ImGui::MenuItem("Camera view", nullptr, &showCameraView_);
         ImGui::MenuItem("Logic analyser", nullptr, &showAnalyser_);
         ImGui::Separator();
         ImGui::MenuItem("Names in 3D", nullptr, &showNames_);

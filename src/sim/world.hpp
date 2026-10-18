@@ -268,6 +268,8 @@ private:
     void updateActuators(double stepStart, double stepEnd);
     void updateBins();
     void updateCameras(double stepEnd);
+    void takeLines(Camera& camera, double stepEnd);
+    void takeLine(Camera& camera, double time, double stepEnd);
     void updateFieldSensors(double stepStart, double stepEnd);
     static void recordSetpoint(Conveyor& conveyor, double time);
     void cameraTrigger(Camera& camera, double time);

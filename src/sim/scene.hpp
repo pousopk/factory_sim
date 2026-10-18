@@ -162,6 +162,11 @@ void setCarriage(Scene& scene, std::size_t conveyor, Carriage carriage);
 // which turns its boxes onto a second line, up a lift to a third, all
 // sequenced by soft_plc running `program` (examples/equipment.st).
 Scene equipmentDemo(std::string program);
+// Line-scan and area cameras over the same belt: boxes of different sizes
+// and tins pass a line camera triggered by the encoder (square pixels at any
+// speed), then an area camera looking down.
+Scene cameraDemo();
+
 // A merge: a side conveyor joining a main line, which has priority; the
 // side waits for a gap (examples/merge.st).
 Scene mergeDemo(std::string program);

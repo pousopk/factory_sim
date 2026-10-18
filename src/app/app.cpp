@@ -93,6 +93,7 @@ void App::frame(double realSeconds, int width, int height) {
     drawPlcVariables();
     drawAnalyser();
     drawCameras();
+    drawCameraView();
     drawFileDialog();
     drawNewConfirmation();
 

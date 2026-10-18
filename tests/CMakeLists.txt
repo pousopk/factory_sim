@@ -13,6 +13,7 @@ add_executable(factory_sim_tests
   sim/drive_test.cpp
   sim/field_sensors_test.cpp
   sim/equipment_test.cpp
+  sim/linescan_test.cpp
   render/scene_test.cpp
   render/orbit_camera_test.cpp
   edit/scene_history_test.cpp

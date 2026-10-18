@@ -3,6 +3,7 @@
 #include "render/orbit_camera.hpp"
 #include "render/scene.hpp"
 #include "render/shader.hpp"
+#include "sim/camera.hpp"
 #include <vector>
 
 // Draws the scene with OpenGL 3.3: a floor with a metre grid, and boxes
@@ -11,6 +12,55 @@
 // filled once per frame. It needs a current OpenGL context, so it's created
 // after the window.
 namespace fsim {
+
+// An image drawn offscreen, for an ImGui window to show: what a camera sees.
+// It owns its OpenGL objects (textures and framebuffers), so it moves but
+// doesn't copy, like Shader.
+class Picture {
+public:
+    Picture() = default;
+    ~Picture();
+    Picture(Picture&& other) noexcept;
+    Picture& operator=(Picture&& other) noexcept;
+    Picture(const Picture&) = delete;
+    Picture& operator=(const Picture&) = delete;
+
+    GLuint texture() const { return image_; } // the finished image (RGBA, 8 bits)
+    int width() const { return width_; }
+    int height() const { return height_; }
+
+private:
+    friend class Renderer;
+    void resize(int width, int height); // (re)creates the targets at that size
+    void release();
+    int width_ = 0;
+    int height_ = 0;
+    GLuint frame_ = 0; // one render: colour texture and depth
+    GLuint frameColor_ = 0;
+    GLuint frameDepth_ = 0;
+    GLuint sum_ = 0; // the renders averaged, in floats
+    GLuint sumColor_ = 0;
+    GLuint finished_ = 0;
+    GLuint image_ = 0;
+};
+
+// A line-scan camera's lines, uploaded as a texture to show.
+class LineTexture {
+public:
+    LineTexture() = default;
+    ~LineTexture();
+    LineTexture(const LineTexture&) = delete;
+    LineTexture& operator=(const LineTexture&) = delete;
+    void upload(const LineImage& image); // oldest line first, at the top
+    GLuint texture() const { return texture_; }
+    int width() const { return width_; }
+    int height() const { return height_; }
+
+private:
+    GLuint texture_ = 0;
+    int width_ = 0;
+    int height_ = 0;
+};
 
 class Renderer {
 public:
@@ -21,6 +71,13 @@ public:
 
     // Draws into the current framebuffer of `width` x `height` pixels.
     void draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera, int width, int height);
+
+    // Draws what a camera sees into `picture` (sized `width` x `height`): the
+    // scene once for each of `moments` (the boxes as they were at moments
+    // during the exposure), averaged, which blurs what moved, then noise of
+    // `noise` grey levels (standard deviation) added, from `seed`.
+    void drawPicture(Picture& picture, const std::vector<std::vector<DrawBox>>& moments,
+                     const glm::mat4& viewProjection, glm::vec3 eye, int width, int height, float noise, unsigned seed);
 
     // What the last frames cost: the CPU's time to hand the frame to OpenGL,
     // the GPU's time to draw it (measured with a timer query, read a frame
@@ -36,7 +93,14 @@ public:
     bool shadows = true; // the sun's shadows (a depth pass from the sun, then a lookup per pixel)
 
 private:
+    // The scene into `framebuffer` (0: the window), with its shadow pass.
+    void render(const std::vector<DrawBox>& boxes, const glm::mat4& viewProjection, glm::vec3 eye, GLuint framebuffer,
+                int width, int height);
+
     Stats stats_;
+    Shader accumulate_;        // adds one render, weighted, to the sum
+    Shader finish_;            // the sum, plus noise, into the image
+    GLuint emptyArray_ = 0;    // for the full-screen triangle (its corners come from gl_VertexID)
     GLuint timer_[2] = {0, 0}; // two queries: one being measured, one being read
     int frame_ = 0;
     Shader boxShader_;

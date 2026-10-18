@@ -1,6 +1,7 @@
 #include "render/scene.hpp"
 #include <algorithm>
 #include <cmath>
+#include <glm/gtc/matrix_transform.hpp>
 #include <limits>
 
 namespace fsim {
@@ -201,9 +202,9 @@ std::vector<DrawBox> cameraBoxes(const Camera& camera, const Conveyor& conveyor,
     const auto along = conveyor.direction();
     const auto left = leftOf(along);
     const auto target = conveyor.beltPoint(spec.along); // the middle of the picture, on the belt
-    // Looking at the target from `distance` away, turned by the tilt around
-    // the direction of travel: straight down at 0, from the left above 0.
-    constexpr float distance = 0.40F;
+    // Looking at the target from its working distance, turned by the tilt
+    // around the direction of travel: straight down at 0, from the left above 0.
+    const float distance = spec.workingDistance;
     const glm::vec3 up{0.0F, 1.0F, 0.0F};
     const auto toCamera = up * std::cos(spec.tilt) + left * std::sin(spec.tilt);
     const auto body = target + toCamera * distance;
@@ -243,8 +244,11 @@ std::vector<DrawBox> cameraBoxes(const Camera& camera, const Conveyor& conveyor,
             alpha = 0.55F;
         }
     }
-    boxes.push_back(DrawBox{target + glm::vec3(0.0F, 0.002F, 0.0F), heading,
-                            glm::vec3(spec.fieldOfView, 0.002F, conveyor.spec.width), color, 0.0F, 0.0F, alpha, true});
+    // A line-scan camera sees a thin line across the belt.
+    const auto view = spec.kind == CameraKind::Line ? glm::vec3(0.004F, 0.002F, spec.lineWidth)
+                                                    : glm::vec3(spec.fieldOfView, 0.002F, conveyor.spec.width);
+    boxes.push_back(DrawBox{target + glm::vec3(0.0F, 0.002F, 0.0F), heading, view, color, 0.0F, 0.0F,
+                            spec.kind == CameraKind::Line ? 0.8F : alpha, true});
     return boxes;
 }
 
@@ -487,6 +491,32 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
         }
     }
     return boxes;
+}
+
+CameraView cameraView(const CameraSpec& spec, const Conveyor& conveyor, int maxSize) {
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    const auto along = conveyor.direction();
+    const auto left = leftOf(along);
+    const auto target = conveyor.beltPoint(spec.along);
+    const auto toCamera = up * std::cos(spec.tilt) + left * std::sin(spec.tilt);
+    CameraView view;
+    view.eye = target + toCamera * spec.workingDistance;
+    // The picture's x runs along the travel, so its "up" is the belt's left
+    // (turned with the camera).
+    const auto pictureUp = glm::normalize(glm::cross(toCamera, along));
+    view.view = glm::lookAt(view.eye, target, pictureUp);
+    // The lens: what the field of view (along) and the pixels make across,
+    // seen from the working distance.
+    const float across = spec.fieldOfView * static_cast<float>(spec.pixelsAcross) / static_cast<float>(spec.pixels);
+    const float angle = 2.0F * std::atan(across / 2.0F / spec.workingDistance);
+    const float aspect = static_cast<float>(spec.pixels) / static_cast<float>(spec.pixelsAcross);
+    view.projection = glm::perspective(angle, aspect, 0.01F, 20.0F);
+    // Drawn at most `maxSize` pixels wide or high, keeping the camera's shape.
+    const float scale =
+        std::min(1.0F, static_cast<float>(maxSize) / static_cast<float>(std::max(spec.pixels, spec.pixelsAcross)));
+    view.width = std::max(1, static_cast<int>(std::lround(static_cast<float>(spec.pixels) * scale)));
+    view.height = std::max(1, static_cast<int>(std::lround(static_cast<float>(spec.pixelsAcross) * scale)));
+    return view;
 }
 
 std::vector<Label> sceneLabels(const World& world) {

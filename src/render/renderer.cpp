@@ -7,6 +7,7 @@
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace fsim {
@@ -189,6 +190,75 @@ void main() {
 }
 )";
 
+// A triangle covering the whole target, its corners made from gl_VertexID
+// (no vertex buffer needed), with texture coordinates 0..1 over the target.
+constexpr const char* kFullScreenVertex = R"(#version 330 core
+out vec2 vUv;
+void main() {
+    vec2 corner = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+    vUv = corner;
+    gl_Position = vec4(corner * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+
+// One render of the exposure, weighted, added to the sum (blending adds).
+constexpr const char* kAccumulateFragment = R"(#version 330 core
+in vec2 vUv;
+uniform sampler2D uFrame;
+uniform float uWeight;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(texture(uFrame, vUv).rgb * uWeight, 1.0);
+}
+)";
+
+// The sum, plus noise: two pseudo-random numbers per pixel from its place
+// and the seed, made into a normal distribution (Box-Muller), the same for
+// all three colours (a monochrome sensor's noise).
+constexpr const char* kFinishFragment = R"(#version 330 core
+in vec2 vUv;
+uniform sampler2D uSum;
+uniform float uNoise; // standard deviation, 0..1
+uniform float uSeed;
+out vec4 fragColor;
+float hash(vec2 p) {
+    return fract(sin(dot(p, vec2(12.9898, 78.233)) + uSeed) * 43758.5453);
+}
+void main() {
+    vec3 color = texture(uSum, vUv).rgb;
+    if (uNoise > 0.0) {
+        float u1 = max(hash(gl_FragCoord.xy), 1e-6);
+        float u2 = hash(gl_FragCoord.xy + 17.3);
+        color += uNoise * sqrt(-2.0 * log(u1)) * cos(6.2831853 * u2);
+    }
+    fragColor = vec4(clamp(color, 0.0, 1.0), 1.0);
+}
+)";
+
+GLuint colorTarget(GLenum format, GLenum type, int width, int height) {
+    GLuint texture = 0;
+    glGenTextures(1, &texture);
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, static_cast<GLint>(format), width, height, 0, GL_RGBA, type, nullptr);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    return texture;
+}
+
+GLuint framebufferFor(GLuint color, GLuint depth) {
+    GLuint framebuffer = 0;
+    glGenFramebuffers(1, &framebuffer);
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+    if (depth != 0) {
+        glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, depth);
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+    return framebuffer;
+}
+
 std::string join(std::initializer_list<const char*> parts) {
     std::string text;
     for (const char* part : parts) {
@@ -330,8 +400,139 @@ void pointAtInstances(std::size_t first) {
 
 } // namespace
 
+// ---------------------------------------------------------------- Pictures
+
+Picture::~Picture() {
+    release();
+}
+
+Picture::Picture(Picture&& other) noexcept {
+    *this = std::move(other);
+}
+
+Picture& Picture::operator=(Picture&& other) noexcept {
+    if (this != &other) {
+        release();
+        width_ = std::exchange(other.width_, 0);
+        height_ = std::exchange(other.height_, 0);
+        frame_ = std::exchange(other.frame_, 0);
+        frameColor_ = std::exchange(other.frameColor_, 0);
+        frameDepth_ = std::exchange(other.frameDepth_, 0);
+        sum_ = std::exchange(other.sum_, 0);
+        sumColor_ = std::exchange(other.sumColor_, 0);
+        finished_ = std::exchange(other.finished_, 0);
+        image_ = std::exchange(other.image_, 0);
+    }
+    return *this;
+}
+
+void Picture::release() {
+    const GLuint framebuffers[] = {frame_, sum_, finished_};
+    const GLuint textures[] = {frameColor_, sumColor_, image_};
+    glDeleteFramebuffers(3, framebuffers);
+    glDeleteTextures(3, textures);
+    glDeleteRenderbuffers(1, &frameDepth_);
+    frame_ = sum_ = finished_ = frameColor_ = sumColor_ = image_ = frameDepth_ = 0;
+    width_ = height_ = 0;
+}
+
+// Three targets: one render (8 bits and depth), the sum of renders (16-bit
+// floats, so adding many faint ones doesn't round away), the finished image.
+void Picture::resize(int width, int height) {
+    if (width == width_ && height == height_) {
+        return;
+    }
+    release();
+    width_ = width;
+    height_ = height;
+    frameColor_ = colorTarget(GL_RGBA8, GL_UNSIGNED_BYTE, width, height);
+    glGenRenderbuffers(1, &frameDepth_);
+    glBindRenderbuffer(GL_RENDERBUFFER, frameDepth_);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, width, height);
+    frame_ = framebufferFor(frameColor_, frameDepth_);
+    sumColor_ = colorTarget(GL_RGBA16F, GL_FLOAT, width, height);
+    sum_ = framebufferFor(sumColor_, 0);
+    image_ = colorTarget(GL_RGBA8, GL_UNSIGNED_BYTE, width, height);
+    finished_ = framebufferFor(image_, 0);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+LineTexture::~LineTexture() {
+    glDeleteTextures(1, &texture_);
+}
+
+void LineTexture::upload(const LineImage& image) {
+    if (image.lines.empty()) {
+        return;
+    }
+    if (texture_ == 0) {
+        glGenTextures(1, &texture_);
+    }
+    width_ = image.width;
+    height_ = static_cast<int>(image.lines.size());
+    std::vector<std::uint8_t> pixels;
+    pixels.reserve(static_cast<std::size_t>(width_) * static_cast<std::size_t>(height_) * 3);
+    for (const auto& line : image.lines) {
+        pixels.insert(pixels.end(), line.begin(), line.end());
+    }
+    glBindTexture(GL_TEXTURE_2D, texture_);
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1); // rows of 3-byte pixels aren't 4-byte aligned
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB8, width_, height_, 0, GL_RGB, GL_UNSIGNED_BYTE, pixels.data());
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST); // magnified: show the pixels as they are
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void Renderer::drawPicture(Picture& picture, const std::vector<std::vector<DrawBox>>& moments,
+                           const glm::mat4& viewProjection, glm::vec3 eye, int width, int height, float noise,
+                           unsigned seed) {
+    if (moments.empty() || width <= 0 || height <= 0) {
+        return;
+    }
+    picture.resize(width, height);
+    glBindFramebuffer(GL_FRAMEBUFFER, picture.sum_);
+    glViewport(0, 0, width, height);
+    glClearColor(0.0F, 0.0F, 0.0F, 1.0F);
+    glClear(GL_COLOR_BUFFER_BIT);
+    glBindVertexArray(emptyArray_);
+    for (const auto& boxes : moments) {
+        // One moment of the exposure, then added to the sum with its share.
+        render(boxes, viewProjection, eye, picture.frame_, width, height);
+        glBindFramebuffer(GL_FRAMEBUFFER, picture.sum_);
+        glViewport(0, 0, width, height);
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_ONE, GL_ONE);
+        accumulate_.use();
+        accumulate_.set("uFrame", 0);
+        accumulate_.set("uWeight", 1.0F / static_cast<float>(moments.size()));
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, picture.frameColor_);
+        glBindVertexArray(emptyArray_);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        glDisable(GL_BLEND);
+        ++stats_.drawCalls;
+    }
+    glBindFramebuffer(GL_FRAMEBUFFER, picture.finished_);
+    finish_.use();
+    finish_.set("uSum", 0);
+    finish_.set("uNoise", noise / 255.0F);
+    finish_.set("uSeed", static_cast<float>(seed % 1000U));
+    glBindTexture(GL_TEXTURE_2D, picture.sumColor_);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    ++stats_.drawCalls;
+    glBindTexture(GL_TEXTURE_2D, 0);
+    glBindVertexArray(0);
+    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+}
+
+// ---------------------------------------------------------------- The renderer
+
 Renderer::Renderer()
-    : boxShader_(kBoxVertex, join({kBoxFragmentStart, kShadowFunction, kBoxFragmentMain})),
+    : accumulate_(kFullScreenVertex, kAccumulateFragment), finish_(kFullScreenVertex, kFinishFragment),
+      boxShader_(kBoxVertex, join({kBoxFragmentStart, kShadowFunction, kBoxFragmentMain})),
       floorShader_(kFloorVertex, join({kFloorFragmentStart, kShadowFunction, kFloorFragmentMain})),
       depthShader_(kDepthVertex, kDepthFragment) {
     glGenBuffers(1, &instanceBuffer_);
@@ -374,9 +575,11 @@ Renderer::Renderer()
     glBindTexture(GL_TEXTURE_2D, 0);
 
     glGenQueries(2, timer_);
+    glGenVertexArrays(1, &emptyArray_);
 }
 
 Renderer::~Renderer() {
+    glDeleteVertexArrays(1, &emptyArray_);
     glDeleteQueries(2, timer_);
     glDeleteFramebuffers(1, &shadowFramebuffer_);
     glDeleteTextures(1, &shadowMap_);
@@ -402,7 +605,16 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
     glBeginQuery(GL_TIME_ELAPSED, measuring);
     stats_.drawCalls = 0;
     stats_.boxes = boxes.size();
+    const float aspect = height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
+    render(boxes, camera.projection(aspect) * camera.view(), camera.position(), 0, width, height);
+    glEndQuery(GL_TIME_ELAPSED);
+    ++frame_;
+    stats_.cpuMilliseconds =
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
+}
 
+void Renderer::render(const std::vector<DrawBox>& boxes, const glm::mat4& viewProjection, glm::vec3 eye,
+                      GLuint framebuffer, int width, int height) {
     // The boxes as instance records, in four groups: solid cubes, solid
     // cylinders, then the see-through ones (drawn last, over the rest).
     std::vector<Instance> instances;
@@ -471,9 +683,9 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
         drawGroup(0);
         drawGroup(1);
         glDisable(GL_POLYGON_OFFSET_FILL);
-        glBindFramebuffer(GL_FRAMEBUFFER, 0);
     }
 
+    glBindFramebuffer(GL_FRAMEBUFFER, framebuffer);
     glViewport(0, 0, width, height);
     glClearColor(0.55F, 0.62F, 0.70F, 1.0F); // a pale sky
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
@@ -482,13 +694,10 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, shadowMap_);
 
-    const float aspect = height > 0 ? static_cast<float>(width) / static_cast<float>(height) : 1.0F;
-    const auto viewProjection = camera.projection(aspect) * camera.view();
-
     floorShader_.use();
     floorShader_.set("uViewProjection", viewProjection);
     floorShader_.set("uLightSpace", lightSpace);
-    floorShader_.set("uCamera", camera.position());
+    floorShader_.set("uCamera", eye);
     floorShader_.set("uShadowMap", 0);
     floorShader_.set("uShadows", shadows ? 1.0F : 0.0F);
     glBindVertexArray(floorArray_);
@@ -515,10 +724,6 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
     glBindTexture(GL_TEXTURE_2D, 0);
     glDisable(GL_CULL_FACE);
     glDisable(GL_DEPTH_TEST);
-    glEndQuery(GL_TIME_ELAPSED);
-    ++frame_;
-    stats_.cpuMilliseconds =
-        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count();
 }
 
 } // namespace fsim

@@ -90,6 +90,11 @@ private:
     // in the main panel, and the Cameras window (which camera took which
     // item, and the gap study).
     void drawCameraInspector(std::size_t index);
+    void drawLineCameraSettings(CameraSpec& spec);
+    // What a camera sees (camera_view.cpp): an area camera's live view and
+    // last picture, a line-scan camera's growing image.
+    void drawCameraView();
+    std::vector<std::vector<DrawBox>> exposureMoments(const Camera& camera, double middle) const;
     // Proximity switches, lasers and light curtains (sensors.cpp).
     void drawProximityInspector(std::size_t index);
     void drawLaserInspector(std::size_t index);
@@ -201,6 +206,15 @@ private:
     std::optional<Pick::Kind> placing_; // a new device waiting for a click on a belt
     std::optional<Pick> hovered_;       // the belt under the mouse while placing
     std::optional<Clip> clipboard_;
+
+    // The Camera view window.
+    bool showCameraView_ = true;
+    int viewedCamera_ = 0;
+    Picture livePicture_;
+    Picture lastPicture_;
+    double lastPictureAt_ = -1.0; // the exposure of the shot in lastPicture_
+    LineTexture lineTexture_;
+    std::uint64_t linesShown_ = 0;
     float scanMilliseconds_ = 10.0F; // a PLC reading the photocell this often (for the trigger table)
     int newSorterSensor_ = 0;        // the sensor and pusher chosen for the next sorter
     int newSorterPusher_ = 0;

@@ -163,3 +163,35 @@ TEST_CASE("Every named device has a label just above it") {
     const auto conveyor = find("C1");
     CHECK(conveyor->position.x == doctest::Approx(scene.conveyors[0].spec.length / 2.0F));
 }
+
+TEST_CASE("An area camera's view: its field of view fills its picture, along the travel") {
+    auto world = std::make_unique<World>(1);
+    ConveyorSpec belt;
+    belt.length = 4.0F;
+    belt.heading = 0.7F; // any direction
+    world->addConveyor(belt);
+    CameraSpec spec;
+    spec.along = 2.0F;
+    spec.fieldOfView = 0.3F;
+    spec.pixels = 1280;
+    spec.pixelsAcross = 1024;
+    spec.workingDistance = 0.5F;
+    const auto& c = world->conveyors()[0];
+    const auto view = cameraView(spec, c);
+    const auto onPicture = [&](glm::vec3 p) {
+        const auto clip = view.projection * view.view * glm::vec4(p, 1.0F);
+        return glm::vec2(clip) / clip.w;
+    };
+    const auto middle = onPicture(c.beltPoint(2.0F));
+    CHECK(middle.x == doctest::Approx(0.0F).epsilon(1e-4));
+    CHECK(middle.y == doctest::Approx(0.0F).epsilon(1e-4));
+    // The ends of the field of view, along the travel, at the picture's left and right.
+    CHECK(onPicture(c.beltPoint(2.15F)).x == doctest::Approx(1.0F).epsilon(1e-3));
+    CHECK(onPicture(c.beltPoint(1.85F)).x == doctest::Approx(-1.0F).epsilon(1e-3));
+    // Across: 0.3 x 1024 / 1280 = 0.24 m, to the top and bottom.
+    const auto left = leftOf(c.direction());
+    CHECK(std::abs(onPicture(c.beltPoint(2.0F) + left * 0.12F).y) == doctest::Approx(1.0F).epsilon(1e-3));
+    // Drawn at most 640 wide, the camera's shape kept.
+    CHECK(view.width == 640);
+    CHECK(view.height == 512);
+}

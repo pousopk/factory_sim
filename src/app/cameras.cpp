@@ -66,10 +66,28 @@ void App::drawCameraInspector(std::size_t index) {
     scaledSlider("from", spec.tilt, kDegrees, -80.0F, 80.0F, "%.0f deg");
     ImGui::SetItemTooltip(
         "0: straight down; positive from the left, negative from the right (looking along the travel)");
+    int kind = spec.kind == CameraKind::Line ? 1 : 0;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    if (ImGui::Combo("kind", &kind, "area (pictures)\0line scan (lines)\0")) {
+        spec.kind = kind == 1 ? CameraKind::Line : CameraKind::Area;
+    }
+    if (spec.kind == CameraKind::Line) {
+        drawLineCameraSettings(spec);
+        return;
+    }
     scaledSlider("field of view", spec.fieldOfView, 1000.0F, 20.0F, 600.0F, "%.0f mm");
     ImGui::SetNextItemWidth(kFieldWidth);
     ImGui::SliderInt("pixels", &spec.pixels, 320, 5000);
-    ImGui::SetItemTooltip("Across the field of view, along the travel");
+    ImGui::SetItemTooltip("Along the travel");
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderInt("pixels across", &spec.pixelsAcross, 240, 5000);
+    scaledSlider("working distance", spec.workingDistance, 1000.0F, 50.0F, 2000.0F, "%.0f mm");
+    ImGui::SetItemTooltip("From the lens to the belt: with the field of view, it sets the lens angle");
+    ImGui::TextColored(
+        kDim, "lens angle %.1f deg across, pixel %.3f mm",
+        2.0 * std::atan(spec.fieldOfView * spec.pixelsAcross / spec.pixels / 2.0 / spec.workingDistance) * kDegrees,
+        spec.fieldOfView / static_cast<float>(spec.pixels) * 1000.0F);
+    scaledSlider("noise", spec.noise, 1.0F, 0.0F, 30.0F, "%.1f grey levels");
 
     ImGui::SeparatorText("Timing");
     scaledSlider("trigger delay", spec.triggerDelay, 1000.0, 0.0F, 300.0F, "%.1f ms");
@@ -95,6 +113,49 @@ void App::drawCameraInspector(std::size_t index) {
     ImGui::SetItemTooltip("The PLC output wired to its trigger line: a rising edge takes a picture");
     addressField("ready", spec.readyInput, IoAddress::Area::Input, IoAddress::Size::Bit);
     ImGui::SetItemTooltip("The PLC input its \"ready for a trigger\" line is wired to (off while busy)");
+}
+
+// A line-scan camera: its line, what starts each line, and what that makes
+// of the image: the pixel's size across (the line) and along (the travel).
+void App::drawLineCameraSettings(CameraSpec& spec) {
+    const auto& s = scene();
+    scaledSlider("line width", spec.lineWidth, 1000.0F, 20.0F, 2000.0F, "%.0f mm across");
+    ImGui::SetNextItemWidth(kFieldWidth);
+    ImGui::SliderInt("pixels", &spec.pixelsAcross, 64, 4096);
+    int trigger = spec.lineTrigger == LineTrigger::Encoder ? 1 : 0;
+    ImGui::SetNextItemWidth(kFieldWidth);
+    if (ImGui::Combo("each line", &trigger, "at a fixed rate\0from the encoder\0")) {
+        spec.lineTrigger = trigger == 1 ? LineTrigger::Encoder : LineTrigger::FreeRun;
+    }
+    const float speed = spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.targetSpeed : 0.0F;
+    const double perMetre =
+        spec.conveyor < s.conveyors.size() ? s.conveyors[spec.conveyor].spec.encoder.pulsesPerMetre() : 1.0;
+    const double across = spec.lineWidth / spec.pixelsAcross;
+    double alongPixel = 0.0;
+    if (spec.lineTrigger == LineTrigger::FreeRun) {
+        scaledSlider("line rate", spec.lineRate, 0.001, 0.1F, 50.0F, "%.2f kHz");
+        alongPixel = speed / spec.lineRate;
+        ImGui::TextColored(kDim, "for square pixels at %.2f m/s: %.2f kHz", speed, speed / across / 1000.0);
+    } else {
+        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SliderInt("pulses per line", &spec.pulsesPerLine, 1, 100);
+        alongPixel = spec.pulsesPerLine / perMetre;
+        ImGui::TextColored(kDim, "for square pixels: %.1f pulses per line (%.0f pulses/m)", across * perMetre,
+                           perMetre);
+    }
+    scaledSlider("exposure", spec.exposure, 1000.0, 0.005F, 5.0F, "%.3f ms per line");
+    scaledSlider("noise", spec.noise, 1.0F, 0.0F, 30.0F, "%.1f grey levels");
+    // What the image will look like: a pixel's size each way.
+    const double ratio = across > 0.0 ? alongPixel / across : 1.0;
+    ImGui::Text("pixel %.3f mm across, %.3f mm along", across * 1000.0, alongPixel * 1000.0);
+    if (std::abs(ratio - 1.0) > 0.05) {
+        ImGui::TextColored(ImVec4(0.95F, 0.80F, 0.30F, 1.0F), "products look %.2fx %s than they are",
+                           ratio > 1.0 ? ratio : 1.0 / ratio, ratio > 1.0 ? "shorter" : "longer");
+    } else {
+        ImGui::TextColored(kDim, "square pixels: products keep their shape");
+    }
+    const double blur = speed * spec.exposure / across;
+    ImGui::TextColored(blur > 1.0 ? ImVec4(0.95F, 0.80F, 0.30F, 1.0F) : kDim, "motion blur %.2f pixels", blur);
 }
 
 void App::drawCameraTriggering() {

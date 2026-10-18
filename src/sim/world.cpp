@@ -655,8 +655,8 @@ void World::scan(double time) {
         if (const auto on = read(camera.spec.triggerOutput)) {
             const bool was = camera.trigger.value();
             camera.trigger.set(time, *on);
-            if (*on && !was) {
-                cameraTrigger(camera, time);
+            if (*on && !was && camera.spec.kind == CameraKind::Area) {
+                cameraTrigger(camera, time); // (a line-scan camera takes lines on its own clock)
             }
         }
     }
@@ -855,6 +855,130 @@ std::size_t World::addCamera(const CameraSpec& spec) {
     return cameras_.size() - 1;
 }
 
+// A line-scan camera's lines due in the step that ends at `stepEnd`: on its
+// own clock, or when the belt's encoder has counted another `pulsesPerLine`
+// (the moment found within the step, as the belt moves evenly in it).
+void World::takeLines(Camera& camera, double stepEnd) {
+    const auto& spec = camera.spec;
+    if (spec.conveyor >= conveyors_.size()) {
+        return;
+    }
+    const double stepStart = stepEnd - kStep;
+    if (spec.lineTrigger == LineTrigger::FreeRun) {
+        const double period = 1.0 / std::max(spec.lineRate, 1.0);
+        camera.nextLine = std::max(camera.nextLine, stepStart);
+        while (camera.nextLine <= stepEnd + 1e-12) {
+            takeLine(camera, camera.nextLine, stepEnd);
+            camera.nextLine += period;
+        }
+        return;
+    }
+    const auto& conveyor = conveyors_[spec.conveyor];
+    const double perMetre = conveyor.spec.encoder.pulsesPerMetre();
+    const auto per = std::max(spec.pulsesPerLine, 1);
+    const double before = conveyor.travelledBefore;
+    const double after = conveyor.travelled;
+    // A camera that starts late starts at the next line from where the belt is.
+    const auto first = static_cast<std::int64_t>(std::ceil(before * perMetre / per)) * per;
+    camera.nextCount = std::max(camera.nextCount, first);
+    // Forwards only: a belt running back takes no lines (it would draw over the image).
+    while (after > before && static_cast<double>(camera.nextCount) / perMetre <= after) {
+        const double at = static_cast<double>(camera.nextCount) / perMetre;
+        if (at >= before) {
+            takeLine(camera, stepStart + kStep * (at - before) / (after - before), stepEnd);
+        }
+        camera.nextCount += per;
+    }
+}
+
+// One line: for each pixel across the belt, what's straight below it (the top
+// of the highest item, or the belt), averaged over the line's exposure while
+// the items move (motion blur), plus noise. Items are moved back (or on) from
+// where they are at the end of the step to where they are then, at their
+// present velocity, as for photocells.
+void World::takeLine(Camera& camera, double time, double stepEnd) {
+    const auto& spec = camera.spec;
+    const auto& conveyor = conveyors_[spec.conveyor];
+    const auto& bodies = physics_.bodies();
+    const auto along = conveyor.direction();
+    const auto left = leftOf(along);
+    const auto lineMiddle = conveyor.beltPoint(spec.along);
+    const int width = std::clamp(spec.pixelsAcross, 16, 4096);
+    const float pixel = spec.lineWidth / static_cast<float>(width);
+    // The items near the line, with what's needed to see their tops.
+    struct Near {
+        glm::vec3 center;
+        glm::vec3 velocity;
+        glm::mat3 rotation;
+        glm::vec3 half;
+        Shape shape;
+        glm::vec3 color;
+    };
+    std::vector<Near> near;
+    float fastest = 0.0F;
+    for (const auto& item : items_) {
+        const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
+        const auto velocity = toGlm(bodies.GetLinearVelocity(item.body));
+        if (std::abs(glm::dot(center - lineMiddle, along)) > glm::length(item.size) + 0.1F) {
+            continue;
+        }
+        near.push_back(Near{center, velocity, glm::mat3_cast(toGlm(bodies.GetRotation(item.body))), item.size / 2.0F,
+                            item.shape, item.color});
+        fastest = std::max(fastest, std::abs(glm::dot(velocity, along)));
+    }
+    // Enough samples over the exposure for the smear to look smooth: about
+    // two per pixel it moves, up to 16.
+    const float smear = fastest * static_cast<float>(spec.exposure) / pixel;
+    const int samples = std::clamp(static_cast<int>(std::ceil(smear * 2.0F)), 1, 16);
+    const glm::vec3 belt{0.18F, 0.19F, 0.21F};
+    // A normal distribution needs a standard deviation above 0 (0 is
+    // undefined behaviour): made only when there is noise.
+    std::optional<std::normal_distribution<float>> noise;
+    if (spec.noise > 0.0F) {
+        noise.emplace(0.0F, spec.noise);
+    }
+    std::vector<std::uint8_t> line(static_cast<std::size_t>(width) * 3);
+    for (int x = 0; x < width; ++x) {
+        // Pixel 0 on the left of the belt, looking along the travel.
+        const auto point = lineMiddle + left * (spec.lineWidth / 2.0F - (static_cast<float>(x) + 0.5F) * pixel);
+        glm::vec3 sum{0.0F};
+        for (int k = 0; k < samples; ++k) {
+            const double t = time + spec.exposure * (static_cast<double>(k) + 0.5) / samples;
+            float top = -1.0F;
+            glm::vec3 color = belt;
+            for (const auto& item : near) {
+                const auto center = item.center - item.velocity * static_cast<float>(stepEnd - t);
+                const auto local = glm::transpose(item.rotation) * (point - center);
+                const bool under = item.shape == Shape::Tin
+                                       ? local.x * local.x + local.z * local.z <= item.half.x * item.half.x
+                                       : std::abs(local.x) <= item.half.x && std::abs(local.z) <= item.half.z;
+                const float height = center.y + reach(item.shape, item.rotation, item.half, {0.0F, 1.0F, 0.0F});
+                if (under && height > top) {
+                    top = height;
+                    color = item.color;
+                }
+            }
+            sum += color;
+        }
+        const auto average = sum / static_cast<float>(samples) * 255.0F;
+        for (int c = 0; c < 3; ++c) {
+            const float value = average[c] + (noise ? (*noise)(camera.random) : 0.0F);
+            line[static_cast<std::size_t>(x) * 3 + static_cast<std::size_t>(c)] =
+                static_cast<std::uint8_t>(std::clamp(std::lround(value), 0L, 255L));
+        }
+    }
+    auto& image = camera.image;
+    if (image.width != width) {
+        image.lines.clear(); // a new width: a new image
+        image.width = width;
+    }
+    image.lines.push_back(std::move(line));
+    if (image.lines.size() > LineImage::kLines) {
+        image.lines.pop_front();
+    }
+    ++image.taken;
+}
+
 void World::setCameras(const std::vector<CameraSpec>& specs) {
     cameras_.resize(specs.size());
     for (std::size_t i = 0; i < specs.size(); ++i) {
@@ -896,6 +1020,10 @@ void World::cameraTrigger(Camera& camera, double time) {
 void World::updateCameras(double stepEnd) {
     const auto& bodies = physics_.bodies();
     for (auto& camera : cameras_) {
+        if (camera.spec.kind == CameraKind::Line) {
+            takeLines(camera, stepEnd);
+            continue;
+        }
         if (camera.busy.value() && !camera.timing.busyAt(stepEnd)) {
             camera.busy.set(camera.timing.busyUntil(), false);
         }

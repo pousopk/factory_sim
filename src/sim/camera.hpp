@@ -2,8 +2,11 @@
 #include "sim/sensors.hpp"
 #include "sim/signal.hpp"
 #include <cstddef>
+#include <cstdint>
 #include <deque>
+#include <random>
 #include <string>
+#include <vector>
 
 // An industrial camera looking down at a conveyor, triggered by the PLC.
 //
@@ -26,12 +29,30 @@
 // two tins too close together, and a camera still busy with the first one.
 namespace fsim {
 
+// An area camera takes whole pictures, when triggered. A line-scan camera has
+// one row of pixels across the belt and takes a line at a time, as products
+// pass under it; the lines stack up into an image.
+enum class CameraKind { Area, Line };
+
+// What starts each line of a line-scan camera: its own clock (a fixed line
+// rate), or the conveyor's encoder (one line every so many pulses).
+enum class LineTrigger { FreeRun, Encoder };
+
 struct CameraSpec {
     std::string name = "K1";
+    CameraKind kind = CameraKind::Area;
     std::size_t conveyor = 0;
-    float along = 1.5F;        // the middle of its field of view, metres from the belt's start
-    float fieldOfView = 0.20F; // how much of the belt it sees, along the travel, m
-    int pixels = 1280;         // across the field of view, along the travel
+    float along = 1.5F;           // the middle of its field of view, metres from the belt's start
+    float fieldOfView = 0.20F;    // how much of the belt it sees, along the travel, m
+    int pixels = 1280;            // across the field of view, along the travel
+    int pixelsAcross = 1024;      // across the belt (a line-scan camera's whole line)
+    float workingDistance = 0.4F; // from the lens to the belt, m: with the field of view, it sets the lens angle
+    float noise = 0.0F;           // the image's noise: standard deviation in grey levels (0-255)
+    // A line-scan camera: how wide its line is across the belt, and what starts each line.
+    float lineWidth = 0.4F; // m
+    LineTrigger lineTrigger = LineTrigger::FreeRun;
+    double lineRate = 2000.0;  // lines per second, free-running
+    int pulsesPerLine = 5;     // encoder pulses per line
     float tilt = 0.0F;         // where it looks from, turned around the travel: 0 straight down, + from the left (rad)
     double triggerDelay = 0.0; // s, from the trigger to the exposure starting
     double exposure = 0.0005;  // s
@@ -78,8 +99,21 @@ struct Shot {
     Shape itemShape = Shape::Box;
 };
 
+// A line-scan camera's image so far: the most recent lines, oldest first,
+// each `width` RGB pixels.
+struct LineImage {
+    int width = 0;
+    std::deque<std::vector<std::uint8_t>> lines;
+    std::uint64_t taken = 0; // lines since the start
+    static constexpr std::size_t kLines = 1500;
+};
+
 struct Camera {
     CameraSpec spec;
+    LineImage image;            // a line-scan camera's lines
+    double nextLine = 0.0;      // free-running: when the next line is due
+    std::int64_t nextCount = 0; // encoder: the count at which it is
+    std::mt19937 random{11};    // the noise's, seeded: the same every run
     CameraTiming timing;
     Signal trigger;         // the trigger line, as the PLC drives it
     Signal busy;            // busy with a picture: the inverse of its "ready" line
