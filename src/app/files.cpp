@@ -140,6 +140,15 @@ void App::drawMenuBar() {
             }
             ImGui::SetItemTooltip("A belt driven over PROFIdrive telegram 1 by examples/drive.st:\n"
                                   "press Start, turn the Speed potentiometer");
+            if (ImGui::MenuItem("Line equipment (soft_plc)")) {
+                startNew(equipmentDemo(FACTORY_SIM_EXAMPLES_DIR "/equipment.st"));
+            }
+            ImGui::SetItemTooltip("An accumulation conveyor, a turntable and a lift, sequenced by\n"
+                                  "examples/equipment.st");
+            if (ImGui::MenuItem("Merge (soft_plc)")) {
+                startNew(mergeDemo(FACTORY_SIM_EXAMPLES_DIR "/merge.st"));
+            }
+            ImGui::SetItemTooltip("A side conveyor joining a main line, waiting for gaps (examples/merge.st)");
             if (ImGui::MenuItem("Sensors")) {
                 startNew(sensorsDemo());
             }

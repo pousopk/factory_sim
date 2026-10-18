@@ -32,6 +32,12 @@ struct PlacedConveyor {
     ConveyorSpec spec;                  // spec.start and spec.heading only count when it follows nothing
     std::optional<std::size_t> follows; // the conveyor it continues: always an earlier one
     Turn turn = Turn::Straight;         // relative to the one it follows
+    // Or a merge: it joins an earlier conveyor from the side, at right angles,
+    // ending at its edge `joinAt` metres along it, 2 cm higher so items drop
+    // onto it.
+    std::optional<std::size_t> joins;
+    float joinAt = 1.0F;
+    Side joinSide = Side::Left;
 
     bool operator==(const PlacedConveyor&) const = default;
 };
@@ -143,6 +149,23 @@ void applyLive(World& world, const Scene& scene);
 // A new conveyor continuing `conveyor`, straight on or turned, with the same
 // size and speed. Returns its index.
 std::size_t addConveyorAfter(Scene& scene, std::size_t conveyor, Turn turn);
+// A new conveyor joining `conveyor` from `side`, halfway along it (a merge).
+// Returns its index.
+std::size_t addConveyorJoining(Scene& scene, std::size_t conveyor, Side side);
+// Splits a conveyor into `zones` (1: back to one belt), each with its eye
+// wired to the next free input (and its motor output, if the PLC runs them).
+void setZones(Scene& scene, std::size_t conveyor, int zones, ZoneLogic logic);
+// Puts a conveyor on a carriage (or takes it off: Carriage::None), with its
+// output and end sensors wired to the next free addresses.
+void setCarriage(Scene& scene, std::size_t conveyor, Carriage carriage);
+// The line equipment demo: an accumulation conveyor feeding a turntable,
+// which turns its boxes onto a second line, up a lift to a third, all
+// sequenced by soft_plc running `program` (examples/equipment.st).
+Scene equipmentDemo(std::string program);
+// A merge: a side conveyor joining a main line, which has priority; the
+// side waits for a gap (examples/merge.st).
+Scene mergeDemo(std::string program);
+
 // A new conveyor on its own, beside the others. Returns its index.
 std::size_t addConveyor(Scene& scene);
 // Removes a conveyor and everything on it. Conveyors that followed it stay

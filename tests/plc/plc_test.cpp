@@ -270,3 +270,62 @@ TEST_CASE("drive.st starts the drive with Start held from power-up: 16#047E firs
     CHECK(world->conveyors()[0].drive.state() == Drive::State::OperationEnabled);
     CHECK(world->conveyors()[0].speed == doctest::Approx(1.0).epsilon(0.01));
 }
+
+namespace {
+
+ProgramMaker examples() {
+    return [](const Scene& s) {
+        auto made = makeAnyProgram(s, FACTORY_SIM_SOURCE_DIR "/examples");
+        REQUIRE_MESSAGE(made.program != nullptr, made.error);
+        return std::move(made.program);
+    };
+}
+
+std::size_t rising(const Signal& s) {
+    return static_cast<std::size_t>(
+        std::count_if(s.edges().begin(), s.edges().end(), [](const Edge& e) { return e.value; }));
+}
+
+} // namespace
+
+TEST_CASE("equipment.st: boxes accumulate, turn on the turntable, and go up the lift") {
+    auto world = buildWorld(equipmentDemo("equipment.st"), examples());
+    world->run(60.0);
+    const auto& photocells = world->photocells();
+    const auto top = rising(photocells[3].output); // B5, at the top
+    const auto turned = rising(world->conveyors()[1].carriage.extended());
+    CAPTURE(top);
+    CAPTURE(turned);
+    CHECK(turned >= 5);       // boxes went round the turntable
+    CHECK(top >= turned - 3); // and up the lift (a few may be on their way: on C3, the lift or C5)
+    // Nothing fell: every box is on a belt, or has come off the top's end (C5
+    // ends about 6 m along -Z, at 1.2 m).
+    for (const auto& item : world->items()) {
+        CAPTURE(item.position.x);
+        CAPTURE(item.position.y);
+        CAPTURE(item.position.z);
+        CHECK((item.position.y > 0.75F || item.position.z < -5.9F));
+    }
+}
+
+TEST_CASE("merge.st: the side conveyor sends its boxes in the gaps, and no box falls off on the way") {
+    auto world = buildWorld(mergeDemo("merge.st"), examples());
+    // Watched every second: a box on the floor anywhere but past the main
+    // line's end would have been knocked off (boxes on the floor are cleared
+    // after 3 s, so a look at the end alone could miss it).
+    for (int second = 0; second < 90; ++second) {
+        world->run(1.0);
+        for (const auto& item : world->items()) {
+            if (item.position.y < 0.75F) {
+                CAPTURE(second);
+                CAPTURE(item.position.x);
+                CAPTURE(item.position.z);
+                CHECK(item.position.x > 4.9F);
+            }
+        }
+    }
+    // The side line wasn't starved: its boxes left its end for the main line.
+    const auto& waiting = world->photocells()[1].output.edges();
+    const auto merged = std::count_if(waiting.begin(), waiting.end(), [](const Edge& e) { return !e.value; });
+    CHECK(merged >= 10);
+}

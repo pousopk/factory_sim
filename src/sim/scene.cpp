@@ -232,6 +232,16 @@ std::vector<IoAddress> usedAddresses(const Scene& scene) {
     for (const auto& c : scene.conveyors) {
         add(c.spec.runOutput);
         add(c.spec.encoderInput);
+        for (const auto& z : c.spec.zoneIo) {
+            add(z.eyeInput);
+            add(z.motorOutput);
+        }
+        add(c.spec.releaseOutput);
+        if (c.spec.carriage != Carriage::None) {
+            add(c.spec.carriageOutput);
+            add(c.spec.carriageEndInput);
+            add(c.spec.carriageHomeInput);
+        }
         if (c.spec.drive.fitted) {
             add(c.spec.drive.controlOutput);
             add(c.spec.drive.setpointOutput);
@@ -411,6 +421,18 @@ std::vector<ConveyorSpec> placeConveyors(const Scene& scene) {
             }
             }
         }
+        if (conveyor.joins && *conveyor.joins < i && !conveyor.follows) {
+            // A merge: at right angles to the one it joins, pointing at it,
+            // its end at that conveyor's edge, a little higher.
+            const auto& target = placed[*conveyor.joins];
+            const float sign = conveyor.joinSide == Side::Left ? 1.0F : -1.0F;
+            const auto along = directionOf(target.heading);
+            spec.heading = target.heading - sign * kQuarterTurn;
+            const auto end =
+                target.start + along * conveyor.joinAt + leftOf(along) * sign * (target.width / 2.0F + kTransferGap);
+            spec.start = end - directionOf(spec.heading) * spec.length;
+            spec.beltHeight = target.beltHeight + 0.02F;
+        }
         placed.push_back(spec);
     }
     return placed;
@@ -426,7 +448,7 @@ bool sameLayout(const Scene& a, const Scene& b) {
     for (std::size_t i = 0; i < pa.size(); ++i) {
         if (pa[i].start != pb[i].start || pa[i].heading != pb[i].heading || pa[i].length != pb[i].length ||
             pa[i].width != pb[i].width || pa[i].beltHeight != pb[i].beltHeight || pa[i].guideLeft != pb[i].guideLeft ||
-            pa[i].guideRight != pb[i].guideRight) {
+            pa[i].guideRight != pb[i].guideRight || pa[i].zones != pb[i].zones || pa[i].carriage != pb[i].carriage) {
             return false;
         }
     }
@@ -473,10 +495,7 @@ std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make, 
 }
 
 void applyLive(World& world, const Scene& scene) {
-    const auto placed = placeConveyors(scene);
-    for (std::size_t i = 0; i < placed.size() && i < world.conveyors().size(); ++i) {
-        world.conveyors()[i].spec = placed[i];
-    }
+    world.setConveyorSpecs(placeConveyors(scene));
     world.setPhotocells(scene.photocells);
     world.setSpawners(scene.spawners);
     world.setStrokes(scene.pushers, scene.diverters, scene.stoppers);
@@ -509,6 +528,183 @@ std::size_t addConveyorAfter(Scene& scene, std::size_t conveyor, Turn turn) {
     return scene.conveyors.size() - 1;
 }
 
+std::size_t addConveyorJoining(Scene& scene, std::size_t conveyor, Side side) {
+    PlacedConveyor next;
+    next.spec = scene.conveyors.at(conveyor).spec;
+    next.spec.name = freeName(scene.conveyors, "C", [](const PlacedConveyor& c) { return c.spec.name; });
+    next.spec.length = 1.5F;
+    next.spec.runOutput.clear();
+    next.spec.encoderInput.clear();
+    next.spec.drive = {};
+    next.spec.zones = 1;
+    next.spec.zoneIo.clear();
+    next.spec.carriage = Carriage::None;
+    next.joins = conveyor;
+    next.joinAt = scene.conveyors[conveyor].spec.length / 2.0F;
+    next.joinSide = side;
+    scene.conveyors.push_back(next);
+    return scene.conveyors.size() - 1;
+}
+
+void setZones(Scene& scene, std::size_t conveyor, int zones, ZoneLogic logic) {
+    auto& spec = scene.conveyors.at(conveyor).spec;
+    spec.zones = std::max(1, zones);
+    spec.zoneLogic = logic;
+    if (spec.zones == 1) {
+        spec.zoneIo.clear();
+        return;
+    }
+    spec.zoneIo.resize(static_cast<std::size_t>(spec.zones));
+    // One at a time, so each new address counts as taken for the next.
+    for (std::size_t z = 0; z < spec.zoneIo.size(); ++z) {
+        if (scene.conveyors[conveyor].spec.zoneIo[z].eyeInput.empty()) {
+            scene.conveyors[conveyor].spec.zoneIo[z].eyeInput =
+                freeAddress(scene, IoAddress::Area::Input, IoAddress::Size::Bit);
+        }
+        if (logic == ZoneLogic::Plc && scene.conveyors[conveyor].spec.zoneIo[z].motorOutput.empty()) {
+            scene.conveyors[conveyor].spec.zoneIo[z].motorOutput =
+                freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Bit);
+        }
+    }
+}
+
+void setCarriage(Scene& scene, std::size_t conveyor, Carriage carriage) {
+    auto& spec = scene.conveyors.at(conveyor).spec;
+    spec.carriage = carriage;
+    if (carriage == Carriage::None) {
+        return;
+    }
+    const auto fill = [&](std::string ConveyorSpec::* field, IoAddress::Area area) {
+        if ((scene.conveyors[conveyor].spec.*field).empty()) {
+            scene.conveyors[conveyor].spec.*field = freeAddress(scene, area, IoAddress::Size::Bit);
+        }
+    };
+    fill(&ConveyorSpec::carriageOutput, IoAddress::Area::Output);
+    fill(&ConveyorSpec::carriageEndInput, IoAddress::Area::Input);
+    fill(&ConveyorSpec::carriageHomeInput, IoAddress::Area::Input);
+}
+
+Scene equipmentDemo(std::string program) {
+    Scene scene;
+    const auto belt = [](const char* name, float length) {
+        PlacedConveyor c;
+        c.spec.name = name;
+        c.spec.length = length;
+        c.spec.targetSpeed = 0.5F;
+        return c;
+    };
+    // C1: four zones of zero-pressure accumulation, the last one released by the PLC.
+    auto c1 = belt("C1", 4.0F);
+    c1.spec.acceleration = 4.0F; // roller motors start and stop fast
+    scene.conveyors.push_back(c1);
+    setZones(scene, 0, 4, ZoneLogic::Local); // eyes %IX0.0-0.3
+    scene.conveyors[0].spec.releaseOutput = "%QX0.0";
+    // C2: a turntable, 0.5 x 0.4 m. Turning about its middle, its corners
+    // sweep a circle of 0.32 m: it stands 8 cm from C1, not the usual 2.
+    auto c2 = belt("C2", 0.5F);
+    c2.spec.start = {4.08F, 0.0F, 0.0F};
+    c2.spec.acceleration = 5.0F; // stops within 2.5 cm
+    c2.spec.runOutput = "%QX0.2";
+    scene.conveyors.push_back(c2);
+    scene.conveyors[1].spec.carriageOutput = "%QX0.1";
+    scene.conveyors[1].spec.carriageEndInput = "%IX0.4";
+    scene.conveyors[1].spec.carriageHomeInput = "%IX0.5";
+    setCarriage(scene, 1, Carriage::Turntable);
+    // C3: from the turntable's left side, turned through 90 degrees.
+    auto c3 = belt("C3", 3.0F);
+    c3.spec.start = {4.33F, 0.0F, -0.33F}; // the table's middle, 0.25 + 0.08 m to the left
+    c3.spec.heading = kQuarterTurn;
+    c3.spec.runOutput = "%QX0.3";
+    scene.conveyors.push_back(c3);
+    // C4: a lift at the end of C3, up 0.4 m to C5.
+    auto c4 = belt("C4", 0.6F);
+    c4.follows = 2;
+    c4.spec.acceleration = 5.0F;
+    c4.spec.runOutput = "%QX0.5";
+    scene.conveyors.push_back(c4);
+    scene.conveyors[3].spec.carriageOutput = "%QX0.4";
+    scene.conveyors[3].spec.carriageEndInput = "%IX1.0";
+    scene.conveyors[3].spec.carriageHomeInput = "%IX1.1";
+    setCarriage(scene, 3, Carriage::Lift);
+    scene.conveyors[3].spec.liftHeight = 0.4F;
+    auto c5 = belt("C5", 2.0F);
+    c5.follows = 3;
+    c5.spec.beltHeight = 1.2F;
+    scene.conveyors.push_back(c5);
+
+    // Boxes in bursts (8 s apart on average, but anywhere from 4 to 12):
+    // faster than the turntable's cycle of about 6 s for a while, so C1 fills
+    // up, then slower, so it empties.
+    SpawnerSpec spawner;
+    spawner.interval = 8.0;
+    spawner.intervalJitter = 4.0;
+    spawner.atBeltSpeed = true;
+    scene.spawners.push_back(spawner);
+    const auto eye = [&](const char* name, std::size_t conveyor, float along, const char* input) {
+        PhotocellSpec p;
+        p.name = name;
+        p.conveyor = conveyor;
+        p.along = along;
+        p.input = input;
+        scene.photocells.push_back(p);
+    };
+    eye("BT", 1, 0.40F, "%IX0.6"); // a box on the turntable, in place
+    eye("B3", 2, 2.80F, "%IX0.7"); // a box at the end of C3
+    eye("BL", 3, 0.45F, "%IX1.2"); // a box on the lift
+    eye("B5", 4, 1.80F, "%IX1.3"); // a box arriving at the top
+    scene.control = Control::SoftPlc;
+    scene.plcProgram = std::move(program);
+    return scene;
+}
+
+Scene mergeDemo(std::string program) {
+    Scene scene;
+    PlacedConveyor main;
+    main.spec.name = "C1";
+    main.spec.length = 5.0F;
+    main.spec.targetSpeed = 0.5F;
+    main.spec.guideRight = true; // the far side of the merge: boxes coming across stop against it
+    scene.conveyors.push_back(main);
+    PlacedConveyor side;
+    side.spec.name = "C2";
+    side.spec.length = 2.0F;
+    side.spec.targetSpeed = 0.5F;
+    side.spec.acceleration = 4.0F;
+    side.spec.runOutput = "%QX0.0";
+    side.joins = 0;
+    side.joinAt = 3.0F;
+    side.joinSide = Side::Left;
+    scene.conveyors.push_back(side);
+    SpawnerSpec onMain;
+    onMain.interval = 4.5;
+    onMain.intervalJitter = 1.5;
+    onMain.atBeltSpeed = true;
+    scene.spawners.push_back(onMain);
+    SpawnerSpec onSide = onMain;
+    onSide.conveyor = 1;
+    onSide.interval = 2.5;
+    scene.spawners.push_back(onSide);
+    PhotocellSpec upstream;
+    upstream.name = "B1"; // on the main line, before the merge
+    upstream.along = 2.2F;
+    upstream.input = "%IX0.0";
+    scene.photocells.push_back(upstream);
+    PhotocellSpec waiting;
+    waiting.name = "B2"; // a box at the end of the side conveyor
+    waiting.conveyor = 1;
+    waiting.along = 1.75F;
+    waiting.input = "%IX0.1";
+    scene.photocells.push_back(waiting);
+    PhotocellSpec out;
+    out.name = "B3"; // the main line's end: every box should pass here
+    out.along = 4.8F;
+    out.input = "%IX0.2";
+    scene.photocells.push_back(out);
+    scene.control = Control::SoftPlc;
+    scene.plcProgram = std::move(program);
+    return scene;
+}
+
 std::size_t addConveyor(Scene& scene) {
     // Beside everything there is: 1 m further along +Z than the furthest part.
     float furthest = 0.0F;
@@ -535,13 +731,20 @@ void removeConveyor(Scene& scene, std::size_t conveyor) {
     const auto placed = placeConveyors(scene);
     for (std::size_t i = 0; i < scene.conveyors.size(); ++i) {
         auto& c = scene.conveyors[i];
-        if (c.follows == conveyor) {
+        if (c.follows == conveyor || c.joins == conveyor) {
             c.spec.start = placed[i].start;
             c.spec.heading = placed[i].heading;
+            c.spec.beltHeight = placed[i].beltHeight;
             c.follows.reset();
+            c.joins.reset();
             c.turn = Turn::Straight;
-        } else if (c.follows) {
-            shiftDown(*c.follows, conveyor);
+        } else {
+            if (c.follows) {
+                shiftDown(*c.follows, conveyor);
+            }
+            if (c.joins) {
+                shiftDown(*c.joins, conveyor);
+            }
         }
     }
     scene.conveyors.erase(scene.conveyors.begin() + static_cast<std::ptrdiff_t>(conveyor));
@@ -934,9 +1137,32 @@ std::string sceneToJson(const Scene& scene) {
                          {"encoder",
                           {{"pulsesPerRevolution", c.spec.encoder.pulsesPerRevolution},
                            {"rollerDiameter", c.spec.encoder.rollerDiameter}}}};
+        if (c.spec.zones > 1) {
+            json io = json::array();
+            for (const auto& z : c.spec.zoneIo) {
+                io.push_back({{"eyeInput", z.eyeInput}, {"motorOutput", z.motorOutput}});
+            }
+            conveyor["zones"] = {{"count", c.spec.zones},
+                                 {"logic", c.spec.zoneLogic == ZoneLogic::Plc ? "plc" : "local"},
+                                 {"io", io},
+                                 {"releaseOutput", c.spec.releaseOutput}};
+        }
+        if (c.spec.carriage != Carriage::None) {
+            conveyor["carriage"] = {{"kind", c.spec.carriage == Carriage::Turntable ? "turntable" : "lift"},
+                                    {"turnAngle", c.spec.turnAngle},
+                                    {"liftHeight", c.spec.liftHeight},
+                                    {"stroke", strokeJson(c.spec.carriageStroke)},
+                                    {"output", c.spec.carriageOutput},
+                                    {"endInput", c.spec.carriageEndInput},
+                                    {"homeInput", c.spec.carriageHomeInput}};
+        }
         if (c.follows) {
             conveyor["follows"] = *c.follows;
             conveyor["turn"] = turnName(c.turn);
+        } else if (c.joins) {
+            conveyor["joins"] = *c.joins;
+            conveyor["joinAt"] = c.joinAt;
+            conveyor["joinSide"] = sideName(c.joinSide);
         } else {
             conveyor["start"] = vec3(c.spec.start);
             conveyor["heading"] = c.spec.heading; // radians, as in the code: converting would lose the last bit
@@ -1123,7 +1349,36 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             const auto encoder = c.value("encoder", json::object());
             spec.encoder.pulsesPerRevolution = encoder.value("pulsesPerRevolution", spec.encoder.pulsesPerRevolution);
             spec.encoder.rollerDiameter = encoder.value("rollerDiameter", spec.encoder.rollerDiameter);
-            if (c.contains("follows")) {
+            if (const auto zones = c.value("zones", json()); zones.is_object()) {
+                spec.zones = std::max(1, zones.value("count", 1));
+                spec.zoneLogic =
+                    zones.value("logic", std::string("local")) == "plc" ? ZoneLogic::Plc : ZoneLogic::Local;
+                for (const auto& z : zones.value("io", json::array())) {
+                    spec.zoneIo.push_back(
+                        ZoneSpec{z.value("eyeInput", std::string()), z.value("motorOutput", std::string())});
+                }
+                spec.zoneIo.resize(static_cast<std::size_t>(spec.zones));
+                spec.releaseOutput = zones.value("releaseOutput", std::string());
+            }
+            if (const auto carriage = c.value("carriage", json()); carriage.is_object()) {
+                spec.carriage = carriage.value("kind", std::string()) == "lift" ? Carriage::Lift : Carriage::Turntable;
+                spec.turnAngle = carriage.value("turnAngle", spec.turnAngle);
+                spec.liftHeight = carriage.value("liftHeight", spec.liftHeight);
+                spec.carriageStroke = strokeFrom(carriage.value("stroke", json()), spec.carriageStroke);
+                spec.carriageOutput = carriage.value("output", std::string());
+                spec.carriageEndInput = carriage.value("endInput", std::string());
+                spec.carriageHomeInput = carriage.value("homeInput", std::string());
+            }
+            if (c.contains("joins")) {
+                const auto joins = c["joins"].get<std::size_t>();
+                if (joins >= scene.conveyors.size()) {
+                    return tl::unexpected(
+                        fmt::format("conveyor {} joins conveyor {}, which doesn't come before it", spec.name, joins));
+                }
+                conveyor.joins = joins;
+                conveyor.joinAt = c.value("joinAt", conveyor.joinAt);
+                conveyor.joinSide = sideFrom(c.value("joinSide", json()), Side::Left);
+            } else if (c.contains("follows")) {
                 const auto follows = c["follows"].get<std::size_t>();
                 if (follows >= scene.conveyors.size()) {
                     return tl::unexpected(fmt::format("conveyor {} follows conveyor {}, which doesn't come before it",

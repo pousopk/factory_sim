@@ -33,12 +33,25 @@ struct Conveyor {
     // it for, sampled every scan like the speed (m/s).
     Drive drive;
     std::deque<std::pair<double, float>> setpointSamples;
+    // An accumulation conveyor's zones: each one's speed, whether its motor
+    // runs, and its photo-eye (a photocell near the zone's end).
+    std::vector<float> zoneSpeed;
+    std::vector<bool> zoneRun;
+    std::vector<ZoneState> zoneState; // local logic: what each zone holds
+    std::vector<bool> eyeBefore;      // each eye at the last step, for its edges
+    std::vector<Photocell> eyes;
+    // A conveyor on a carriage: where it is placed at home (spec is where it
+    // is now), and the carriage's movement.
+    ConveyorSpec home;
+    Stroke carriage;
+    std::vector<glm::vec3> guideOffsets;                // its guides, from the belt's middle, in the belt's own axes
     static constexpr std::size_t kSpeedSamples = 12000; // two minutes of scans
 
     // The encoder's count: whole pulses since the start (negative if the belt ran backwards).
     std::int64_t encoderCount() const;
 
     glm::vec3 direction() const;            // unit vector of travel
+    float speedAt(float along) const;       // the belt's speed there: its zone's, on an accumulation conveyor
     glm::vec3 beltPoint(float along) const; // the point on the belt surface, `along` metres from its start
 };
 
@@ -147,6 +160,10 @@ public:
     double time() const { return static_cast<double>(stepCount_) * kStep; }
     std::uint64_t stepCount() const { return stepCount_; }
 
+    // New settings for the conveyors, in order, while running: speeds,
+    // zones' and carriages' wiring and timing. (Their places and sizes are the
+    // layout: a new world.) A conveyor on a carriage stays where it has moved.
+    void setConveyorSpecs(const std::vector<ConveyorSpec>& specs);
     std::vector<Conveyor>& conveyors() { return conveyors_; }
     const std::vector<Conveyor>& conveyors() const { return conveyors_; }
     std::vector<SpawnerSpec>& spawners() { return spawners_; }
@@ -238,6 +255,13 @@ private:
     class ConveyorContacts;
 
     void updateConveyors();
+    void updateZones(double stepStart, double stepEnd);
+    void updateCarriages(double stepStart, double stepEnd);
+    // The items' extents along a conveyor that cross a beam across it at
+    // `height` above the belt (for photocells and zone eyes), and which item
+    // each is.
+    std::vector<std::pair<float, float>> beamIntervals(const Conveyor& conveyor, float height, bool onlyNok,
+                                                       std::vector<std::size_t>* owners = nullptr) const;
     void updateSpawners();
     void removeFallenItems();
     void updatePhotocells(double stepStart, double stepEnd);

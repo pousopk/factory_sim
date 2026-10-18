@@ -456,9 +456,17 @@ void App::drawLinePanel() {
     ImGui::SeparatorText("Conveyors");
     for (std::size_t i = 0; i < s.conveyors.size(); ++i) {
         const auto& c = s.conveyors[i];
-        const auto detail = c.follows && *c.follows < s.conveyors.size()
-                                ? fmt::format("  after {}, {}", s.conveyors[*c.follows].spec.name, turnName(c.turn))
-                                : std::string("  on its own");
+        auto detail = c.follows && *c.follows < s.conveyors.size()
+                          ? fmt::format("  after {}, {}", s.conveyors[*c.follows].spec.name, turnName(c.turn))
+                      : c.joins && *c.joins < s.conveyors.size()
+                          ? fmt::format("  joins {}", s.conveyors[*c.joins].spec.name)
+                          : std::string("  on its own");
+        if (c.spec.zones > 1) {
+            detail += fmt::format(", {} zones", c.spec.zones);
+        }
+        if (c.spec.carriage != Carriage::None) {
+            detail += c.spec.carriage == Carriage::Turntable ? ", turntable" : ", lift";
+        }
         selectable(fmt::format("{}  {:.2f} m{}###c{}", c.spec.name, c.spec.length, detail, i),
                    Pick{Pick::Kind::Conveyor, i});
     }
@@ -541,6 +549,15 @@ void App::drawLinePanel() {
             selected_ = Pick{Pick::Kind::Conveyor, addConveyorAfter(s, selected_->index, turn)};
         }
     }
+    ImGui::SameLine();
+    ImGui::TextUnformatted(" Join it:");
+    for (const auto side : {Side::Left, Side::Right}) {
+        ImGui::SameLine();
+        if (ImGui::SmallButton(side == Side::Left ? "from the left" : "from the right")) {
+            selected_ = Pick{Pick::Kind::Conveyor, addConveyorJoining(s, selected_->index, side)};
+        }
+    }
+    ImGui::SetItemTooltip("A conveyor merging into the selected one from the side, halfway along it");
     ImGui::EndDisabled();
     if (ImGui::SmallButton("New conveyor")) {
         selected_ = Pick{Pick::Kind::Conveyor, addConveyor(s)};
@@ -675,6 +692,19 @@ void App::drawConveyorInspector(std::size_t index) {
             placed.turn = Turn::Straight;
         }
         ImGui::SetItemTooltip("Keep it where it is, but no longer attached to the conveyor before it");
+    } else if (placed.joins && *placed.joins < s.conveyors.size()) {
+        ImGui::Text("Joins %s from the %s", s.conveyors[*placed.joins].spec.name.c_str(),
+                    placed.joinSide == Side::Left ? "left" : "right");
+        ImGui::SetNextItemWidth(kFieldWidth);
+        ImGui::SliderFloat("at", &placed.joinAt, 0.0F, s.conveyors[*placed.joins].spec.length, "%.2f m along it");
+        if (ImGui::SmallButton("Detach")) {
+            const auto where = placeConveyors(s)[index];
+            spec.start = where.start;
+            spec.heading = where.heading;
+            spec.beltHeight = where.beltHeight;
+            placed.joins.reset();
+        }
+        ImGui::SetItemTooltip("Keep it where it is, but no longer attached to the conveyor it joins");
     } else {
         ImGui::SetNextItemWidth(kFieldWidth);
         ImGui::DragFloat("start x", &spec.start.x, 0.01F, -50.0F, 50.0F, "%.3f m");
@@ -727,6 +757,8 @@ void App::drawConveyorInspector(std::size_t index) {
     ImGui::SetItemTooltip(
         "The motor runs while this output is on (only with a control program).\nEmpty: it always runs.");
     addressField("encoder count", spec.encoderInput, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
+
+    drawConveyorEquipment(index);
 
     ImGui::SeparatorText("Drive on the bus");
     if (ImGui::Checkbox("drive on the bus (PROFIdrive telegram 1)", &spec.drive.fitted) && spec.drive.fitted) {

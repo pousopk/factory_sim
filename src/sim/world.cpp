@@ -93,6 +93,32 @@ glm::vec3 beltPoint(const ConveyorSpec& spec, float along) {
     return spec.start + directionOf(spec.heading) * along + glm::vec3(0.0F, spec.beltHeight, 0.0F);
 }
 
+ConveyorSpec carried(const ConveyorSpec& home, double position) {
+    auto spec = home;
+    const auto t = static_cast<float>(std::clamp(position, 0.0, 1.0));
+    if (home.carriage == Carriage::Turntable) {
+        // Turned about the middle of its belt, which stays where it is.
+        const auto middle = home.start + directionOf(home.heading) * (home.length / 2.0F);
+        spec.heading = home.heading + home.turnAngle * t;
+        spec.start = middle - directionOf(spec.heading) * (home.length / 2.0F);
+    } else if (home.carriage == Carriage::Lift) {
+        spec.beltHeight = home.beltHeight + home.liftHeight * t;
+    }
+    return spec;
+}
+
+int zoneAt(const ConveyorSpec& spec, float along) {
+    if (spec.zones <= 1 || spec.length <= 0.0F) {
+        return 0;
+    }
+    const auto zone = static_cast<int>(std::floor(along / spec.length * static_cast<float>(spec.zones)));
+    return std::clamp(zone, 0, spec.zones - 1);
+}
+
+float Conveyor::speedAt(float along) const {
+    return zoneSpeed.empty() ? speed : zoneSpeed[static_cast<std::size_t>(zoneAt(spec, along))];
+}
+
 glm::vec3 Conveyor::direction() const {
     return directionOf(spec.heading);
 }
@@ -119,19 +145,27 @@ public:
     }
 
 private:
-    // The belt's surface velocity, if the body is a belt.
-    JPH::Vec3 surfaceVelocity(const JPH::Body& body) const {
+    // The belt's surface velocity under `other`, if `body` is a belt. On an
+    // accumulation conveyor, it's the speed of the zone under the other
+    // body's centre: each zone's rollers turn on their own.
+    JPH::Vec3 surfaceVelocity(const JPH::Body& body, const JPH::Body& other) const {
         const auto tag = body.GetUserData();
         if ((tag & kConveyorTag) == 0) {
             return JPH::Vec3::sZero();
         }
         const auto& conveyor = conveyors_[static_cast<std::size_t>(tag & 0xFFFFFFFFULL)];
-        return toJolt(conveyor.direction() * conveyor.speed);
+        float speed = conveyor.speed;
+        if (!conveyor.zoneSpeed.empty()) {
+            const auto at = toGlm(JPH::Vec3(other.GetCenterOfMassPosition()));
+            const float along = glm::dot(at - conveyor.beltPoint(0.0F), conveyor.direction());
+            speed = conveyor.zoneSpeed[static_cast<std::size_t>(zoneAt(conveyor.spec, along))];
+        }
+        return toJolt(conveyor.direction() * speed);
     }
 
     void apply(const JPH::Body& body1, const JPH::Body& body2, JPH::ContactSettings& settings) const {
         // "Body 2's surface velocity minus body 1's", in world space.
-        settings.mRelativeLinearSurfaceVelocity = surfaceVelocity(body2) - surfaceVelocity(body1);
+        settings.mRelativeLinearSurfaceVelocity = surfaceVelocity(body2, body1) - surfaceVelocity(body1, body2);
     }
 
     const std::vector<Conveyor>& conveyors_;
@@ -186,30 +220,52 @@ World::~World() {
 std::size_t World::addConveyor(const ConveyorSpec& spec) {
     Conveyor conveyor;
     conveyor.spec = spec;
+    conveyor.home = spec;
+    conveyor.carriage = Stroke(spec.carriageStroke);
     const auto index = conveyors_.size();
+    // On a carriage, the belt and its guides move: bodies the World moves
+    // itself every step (kinematic), like the actuators' paddles. Otherwise
+    // they're static.
+    const bool moves = spec.carriage != Carriage::None;
 
-    // The belt is a thin static box whose top surface is at beltHeight.
+    // The belt is a thin box whose top surface is at beltHeight.
     const JPH::Vec3 halfSize(spec.length / 2.0F, kBeltThickness / 2.0F, spec.width / 2.0F);
     const auto center = conveyor.beltPoint(spec.length / 2.0F) - glm::vec3(0.0F, kBeltThickness / 2.0F, 0.0F);
     JPH::BodyCreationSettings belt(makeBox(halfSize), JPH::RVec3(center.x, center.y, center.z),
-                                   JPH::Quat::sRotation(JPH::Vec3::sAxisY(), spec.heading), JPH::EMotionType::Static,
-                                   layers::kStatic);
+                                   JPH::Quat::sRotation(JPH::Vec3::sAxisY(), spec.heading),
+                                   moves ? JPH::EMotionType::Kinematic : JPH::EMotionType::Static,
+                                   moves ? layers::kMoving : layers::kStatic);
     belt.mFriction = 1.0F; // rubber
     belt.mUserData = kConveyorTag | index;
-    conveyor.body = physics_.bodies().CreateAndAddBody(belt, JPH::EActivation::DontActivate);
+    belt.mAllowSleeping = !moves;
+    conveyor.body =
+        physics_.bodies().CreateAndAddBody(belt, moves ? JPH::EActivation::Activate : JPH::EActivation::DontActivate);
 
     // Side guides: rails just outside the belt's edges, rising above it.
-    const auto left = leftOf(conveyor.direction());
+    // Their place is kept relative to the belt (along, up, left), so a
+    // carriage can carry them.
     for (const auto& [wanted, sign] : {std::pair{spec.guideLeft, 1.0F}, std::pair{spec.guideRight, -1.0F}}) {
         if (wanted) {
-            const auto rail = conveyor.beltPoint(spec.length / 2.0F) +
-                              left * sign * (spec.width / 2.0F + kGuideThickness / 2.0F) +
-                              glm::vec3(0.0F, kGuideHeight / 2.0F, 0.0F);
-            conveyor.guides.push_back(addStatic(Pose{rail,
-                                                     glm::angleAxis(spec.heading, glm::vec3(0, 1, 0)),
-                                                     {spec.length, kGuideHeight, kGuideThickness}},
-                                                0.2F));
+            conveyor.guideOffsets.emplace_back(0.0F, kGuideHeight / 2.0F,
+                                               sign * (spec.width / 2.0F + kGuideThickness / 2.0F));
         }
+    }
+    for (const auto& offset : conveyor.guideOffsets) {
+        const Pose rail{conveyor.beltPoint(spec.length / 2.0F) + glm::vec3(0.0F, offset.y, 0.0F) +
+                            leftOf(conveyor.direction()) * offset.z,
+                        glm::angleAxis(spec.heading, glm::vec3(0, 1, 0)),
+                        {spec.length, kGuideHeight, kGuideThickness}};
+        conveyor.guides.push_back(moves ? addKinematic(rail, 0.2F) : addStatic(rail, 0.2F));
+    }
+
+    // An accumulation conveyor's zones, all running to begin with.
+    if (spec.zones > 1) {
+        const auto zones = static_cast<std::size_t>(spec.zones);
+        conveyor.zoneSpeed.assign(zones, 0.0F);
+        conveyor.zoneRun.assign(zones, true);
+        conveyor.zoneState.assign(zones, ZoneState::Empty);
+        conveyor.eyeBefore.assign(zones, false);
+        conveyor.eyes.resize(zones);
     }
 
     conveyor.motor.set(time(), true); // runs until a program says otherwise
@@ -395,12 +451,14 @@ void World::step() {
         scan(stepStart);
     }
     updateConveyors();
+    updateCarriages(stepStart, stepStart + kStep);
     updateActuators(stepStart, stepStart + kStep);
     updateSpawners();
     physics_.step(static_cast<float>(kStep));
     removeFallenItems();
     ++stepCount_;
     updatePhotocells(stepStart, time()); // the world now is as it is at the end of the step
+    updateZones(stepStart, time());
     updateCameras(time());
     updateFieldSensors(stepStart, time());
     updateBins();
@@ -480,6 +538,15 @@ void World::scan(double time) {
     }
     for (std::size_t i = 0; i < potentiometers_.size(); ++i) {
         write(potentiometers_[i].address, static_cast<std::uint32_t>(turned_[i]));
+    }
+    for (const auto& conveyor : conveyors_) {
+        for (std::size_t z = 0; z < conveyor.eyes.size() && z < conveyor.spec.zoneIo.size(); ++z) {
+            write(conveyor.spec.zoneIo[z].eyeInput, conveyor.eyes[z].output.value() ? 1U : 0U);
+        }
+        if (conveyor.home.carriage != Carriage::None) {
+            write(conveyor.spec.carriageEndInput, conveyor.carriage.extended().value() ? 1U : 0U);
+            write(conveyor.spec.carriageHomeInput, conveyor.carriage.retracted().value() ? 1U : 0U);
+        }
     }
     for (const auto& proximity : proximities_) {
         write(proximity.spec.input, proximity.detector.output.value() ? 1U : 0U);
@@ -566,6 +633,19 @@ void World::scan(double time) {
         }
         conveyor.motor.set(time, conveyor.running);
         recordSetpoint(conveyor, time);
+        // Zones run by the PLC: one motor output each.
+        if (conveyor.spec.zoneLogic == ZoneLogic::Plc) {
+            for (std::size_t z = 0; z < conveyor.zoneRun.size(); ++z) {
+                const auto motor =
+                    z < conveyor.spec.zoneIo.size() ? read(conveyor.spec.zoneIo[z].motorOutput) : std::nullopt;
+                conveyor.zoneRun[z] = motor.value_or(false);
+            }
+        }
+        if (conveyor.home.carriage != Carriage::None) {
+            if (const auto out = read(conveyor.spec.carriageOutput)) {
+                conveyor.carriage.command(time, *out);
+            }
+        }
     }
     for (std::size_t i = 0; i < lamps_.size(); ++i) {
         lampSignals_[i].set(time, lit(i));
@@ -918,6 +998,50 @@ void World::updateBins() {
 // a belt with a drive on the bus moves as its drive turns it.
 void World::updateConveyors() {
     for (auto& conveyor : conveyors_) {
+        if (!conveyor.zoneSpeed.empty()) {
+            // Accumulation: each zone ramps on its own. In local logic the
+            // zone cards decide, singulating: one box per zone. A box reaching
+            // a zone's eye makes it full; when it leaves the eye, the zone is
+            // empty again and the next one has a box arriving. An empty or
+            // arriving zone runs (to take a box in, or to bring it to the
+            // eye); a full one only passes its box on into an empty zone, or
+            // (the last zone) while it's released. So boxes stop at their
+            // zones' eyes and never push each other.
+            const auto zones = conveyor.zoneSpeed.size();
+            if (conveyor.spec.zoneLogic == ZoneLogic::Local) {
+                auto& state = conveyor.zoneState;
+                for (std::size_t k = 0; k < zones; ++k) {
+                    const bool eye = conveyor.eyes[k].output.value();
+                    if (eye && !conveyor.eyeBefore[k]) {
+                        state[k] = ZoneState::Full;
+                    } else if (!eye && conveyor.eyeBefore[k]) {
+                        state[k] = ZoneState::Empty; // gone on, into the next zone (or off the end)
+                        if (k + 1 < zones) {
+                            state[k + 1] = ZoneState::Arriving;
+                        }
+                    }
+                    conveyor.eyeBefore[k] = eye;
+                }
+                const auto release = parseAddress(conveyor.spec.releaseOutput);
+                const bool released =
+                    !program_ || !release || release->area != IoAddress::Area::Output || io_.bit(*release);
+                for (std::size_t k = 0; k < zones; ++k) {
+                    const bool accepts = k + 1 < zones ? state[k + 1] == ZoneState::Empty : released;
+                    conveyor.zoneRun[k] = state[k] != ZoneState::Full || accepts;
+                }
+            }
+            const float maxChange = conveyor.spec.acceleration * static_cast<float>(kStep);
+            float sum = 0.0F;
+            for (std::size_t z = 0; z < zones; ++z) {
+                const float target = conveyor.running && conveyor.zoneRun[z] ? conveyor.spec.targetSpeed : 0.0F;
+                conveyor.zoneSpeed[z] += std::clamp(target - conveyor.zoneSpeed[z], -maxChange, maxChange);
+                sum += conveyor.zoneSpeed[z];
+            }
+            conveyor.speed = sum / static_cast<float>(zones); // on average, for the panels
+            conveyor.travelledBefore = conveyor.travelled;
+            conveyor.travelled += conveyor.speed * kStep;
+            continue;
+        }
         if (conveyor.spec.drive.fitted) {
             const auto& drive = conveyor.spec.drive;
             const double reference = std::max(drive.referenceSpeed, 0.01F);
@@ -976,7 +1100,7 @@ void World::updateSpawners() {
                   : spec.shape == Shape::Tin ? kTinColor
                                              : boxColor(nextItemId_),
                   conveyor.spec.heading, nok, spec.shape,
-                  spec.atBeltSpeed ? conveyor.direction() * conveyor.speed : glm::vec3(0.0F));
+                  spec.atBeltSpeed ? conveyor.direction() * conveyor.speedAt(spec.offset) : glm::vec3(0.0F));
         ++spawned_;
         spawnedNok_ += nok ? 1 : 0;
 
@@ -1015,6 +1139,98 @@ void World::removeFallenItems() {
 // crossed the on or off threshold in between, the crossing time is found by
 // interpolating between the two, since boxes move evenly within one 1 ms
 // step. So switching times are exact to a fraction of a millisecond.
+std::vector<std::pair<float, float>> World::beamIntervals(const Conveyor& conveyor, float height, bool onlyNok,
+                                                          std::vector<std::size_t>* owners) const {
+    const auto& bodies = physics_.bodies();
+    const auto origin = conveyor.beltPoint(0.0F);
+    const auto along = conveyor.direction();
+    const glm::vec3 side{along.z, 0.0F, -along.x};
+    const float beamY = conveyor.spec.beltHeight + height;
+    // Each item's extent along the belt, if it's in the beam's path: across
+    // the belt, and reaching the beam's height.
+    std::vector<std::pair<float, float>> intervals;
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+        const auto& item = items_[i];
+        if (onlyNok && !item.nok) {
+            continue; // an inspection sensor: good boxes don't trigger it
+        }
+        const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
+        const auto rotation = glm::mat3_cast(toGlm(bodies.GetRotation(item.body)));
+        const auto half = item.size / 2.0F;
+        const auto offset = center - origin;
+        const float a = glm::dot(offset, along);
+        const float vertical = reach(item.shape, rotation, half, {0.0F, 1.0F, 0.0F});
+        const bool atHeight = center.y - vertical <= beamY && beamY <= center.y + vertical;
+        const bool acrossBelt =
+            std::abs(glm::dot(offset, side)) < conveyor.spec.width / 2.0F + reach(item.shape, rotation, half, side);
+        if (atHeight && acrossBelt) {
+            const float extent = reach(item.shape, rotation, half, along);
+            intervals.emplace_back(a - extent, a + extent);
+            if (owners != nullptr) {
+                owners->push_back(i);
+            }
+        }
+    }
+    return intervals;
+}
+
+// Each zone's photo-eye sees the end of its zone, as a photocell does.
+void World::updateZones(double stepStart, double stepEnd) {
+    for (auto& conveyor : conveyors_) {
+        const auto zones = conveyor.eyes.size();
+        for (std::size_t z = 0; z < zones; ++z) {
+            auto& eye = conveyor.eyes[z];
+            const float zoneLength = conveyor.spec.length / static_cast<float>(zones);
+            eye.spec.along = zoneLength * static_cast<float>(z + 1) - std::min(0.03F, zoneLength / 4.0F);
+            eye.spec.height = 0.04F;
+            eye.spec.input = z < conveyor.spec.zoneIo.size() ? conveyor.spec.zoneIo[z].eyeInput : std::string();
+            const auto intervals = beamIntervals(conveyor, eye.spec.height, false);
+            eye.sense(beamCoverage(eye.spec.along, eye.spec.beamDiameter, intervals), stepStart, kStep);
+            while (eye.nextOutput(stepEnd)) {
+            }
+        }
+    }
+}
+
+// Carriages move like actuators; the belt and its guides go where the
+// carriage puts them, given to Jolt as a target for the end of the step.
+void World::updateCarriages(double stepStart, double stepEnd) {
+    auto& bodies = physics_.bodies();
+    for (auto& conveyor : conveyors_) {
+        if (conveyor.home.carriage == Carriage::None) {
+            continue;
+        }
+        conveyor.carriage.update(stepStart, stepEnd);
+        const auto& home = conveyor.home;
+        const auto now = carried(home, conveyor.carriage.position());
+        conveyor.spec.start = now.start;
+        conveyor.spec.heading = now.heading;
+        conveyor.spec.beltHeight = now.beltHeight;
+        const auto rotation = glm::angleAxis(now.heading, glm::vec3(0, 1, 0));
+        const auto move = [&](JPH::BodyID body, glm::vec3 center) {
+            bodies.MoveKinematic(body, JPH::RVec3(center.x, center.y, center.z),
+                                 JPH::Quat(rotation.x, rotation.y, rotation.z, rotation.w), static_cast<float>(kStep));
+        };
+        const auto middle = conveyor.beltPoint(now.length / 2.0F);
+        move(conveyor.body, middle - glm::vec3(0.0F, kBeltThickness / 2.0F, 0.0F));
+        for (std::size_t g = 0; g < conveyor.guides.size(); ++g) {
+            const auto& offset = conveyor.guideOffsets[g];
+            move(conveyor.guides[g],
+                 middle + glm::vec3(0.0F, offset.y, 0.0F) + leftOf(conveyor.direction()) * offset.z);
+        }
+    }
+}
+
+void World::setConveyorSpecs(const std::vector<ConveyorSpec>& specs) {
+    for (std::size_t i = 0; i < specs.size() && i < conveyors_.size(); ++i) {
+        auto& conveyor = conveyors_[i];
+        conveyor.home = specs[i];
+        conveyor.carriage.spec = specs[i].carriageStroke;
+        // A carriage stays where it has moved to.
+        conveyor.spec = carried(specs[i], conveyor.carriage.position());
+    }
+}
+
 void World::updatePhotocells(double stepStart, double stepEnd) {
     const auto& bodies = physics_.bodies();
     for (auto& photocell : photocells_) {
@@ -1023,35 +1239,10 @@ void World::updatePhotocells(double stepStart, double stepEnd) {
             continue;
         }
         const auto& conveyor = conveyors_[spec.conveyor];
+        std::vector<std::size_t> owners; // which item each interval belongs to
+        const auto intervals = beamIntervals(conveyor, spec.height, spec.onlyNok, &owners);
         const auto origin = conveyor.beltPoint(0.0F);
         const auto along = conveyor.direction();
-        const glm::vec3 side{along.z, 0.0F, -along.x};
-        const float beamY = conveyor.spec.beltHeight + spec.height;
-
-        // Each box's extent along the belt, if it's in the beam's path:
-        // across the belt, and reaching the beam's height.
-        std::vector<std::pair<float, float>> intervals;
-        std::vector<std::size_t> owners; // which item each interval belongs to
-        for (std::size_t i = 0; i < items_.size(); ++i) {
-            const auto& item = items_[i];
-            if (spec.onlyNok && !item.nok) {
-                continue; // an inspection sensor: good boxes don't trigger it
-            }
-            const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
-            const auto rotation = glm::mat3_cast(toGlm(bodies.GetRotation(item.body)));
-            const auto half = item.size / 2.0F;
-            const auto offset = center - origin;
-            const float a = glm::dot(offset, along);
-            const float vertical = reach(item.shape, rotation, half, {0.0F, 1.0F, 0.0F});
-            const bool atHeight = center.y - vertical <= beamY && beamY <= center.y + vertical;
-            const bool acrossBelt =
-                std::abs(glm::dot(offset, side)) < conveyor.spec.width / 2.0F + reach(item.shape, rotation, half, side);
-            if (atHeight && acrossBelt) {
-                const float extent = reach(item.shape, rotation, half, along);
-                intervals.emplace_back(a - extent, a + extent);
-                owners.push_back(i);
-            }
-        }
         const auto beamTime = photocell.sense(beamCoverage(spec.along, spec.beamDiameter, intervals), stepStart, kStep);
         if (beamTime) {
             // The box it's about: the one covering the beam's centre, or the

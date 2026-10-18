@@ -173,6 +173,7 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/files.cpp
     src/app/drives.cpp
     src/app/sensors.cpp
+    src/app/equipment.cpp
     src/render/shader.cpp
     src/render/renderer.cpp
   )

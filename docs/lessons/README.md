@@ -18,3 +18,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 10. Analog I/O and drives | [10-drives.md](10-drives.md) |
 | 11. More sensors | [11-sensors.md](11-sensors.md) |
 | 12. Looks and performance | [12-performance.md](12-performance.md) |
+| 13. Line equipment | [13-line-equipment.md](13-line-equipment.md) |

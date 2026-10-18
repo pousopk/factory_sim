@@ -24,14 +24,6 @@
 //   retracted:  ‾‾‾‾‾‾‾‾‾\___________________________________/‾‾‾‾
 namespace fsim {
 
-struct StrokeSpec {
-    double deadTime = 0.015;   // s, from the valve switching to the movement starting
-    double extendTime = 0.12;  // s, to travel the whole stroke out
-    double retractTime = 0.12; // s, and back
-
-    bool operator==(const StrokeSpec&) const = default;
-};
-
 class Stroke {
 public:
     Stroke();

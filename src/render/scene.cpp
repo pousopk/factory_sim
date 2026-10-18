@@ -93,6 +93,16 @@ std::vector<DrawBox> conveyorBoxes(const Conveyor& conveyor) {
         }
     }
 
+    // An accumulation conveyor's zones: a dark line across the belt where each
+    // one ends (the eyes are drawn as photocells).
+    for (int z = 1; z < spec.zones; ++z) {
+        const float at = spec.length * static_cast<float>(z) / static_cast<float>(spec.zones);
+        boxes.push_back(DrawBox{conveyor.beltPoint(at) + glm::vec3(0.0F, 0.001F, 0.0F),
+                                rotation,
+                                {0.012F, 0.002F, spec.width},
+                                {0.05F, 0.05F, 0.06F}});
+    }
+
     // Four legs, from the floor to the frame, near the ends.
     const float legHeight = frameTop - kFrameHeight;
     for (const float at : {kLegSize, spec.length - kLegSize}) {
@@ -372,6 +382,9 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
     const auto& conveyors = world.conveyors();
     for (std::size_t i = 0; i < conveyors.size(); ++i) {
         addParts(boxes, conveyorBoxes(conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected);
+        for (const auto& eye : conveyors[i].eyes) {
+            addParts(boxes, photocellBoxes(eye, conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected);
+        }
     }
     for (std::size_t i = 0; i < world.photocells().size(); ++i) {
         const auto& photocell = world.photocells()[i];
