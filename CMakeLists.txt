@@ -122,11 +122,13 @@ add_library(factory_sim_view STATIC
   src/render/scene.cpp
   src/render/orbit_camera.cpp
   src/edit/scene_history.cpp
+  src/edit/settings.cpp
+  src/edit/file_browser.cpp
   src/analysis/analysis.cpp
   src/analysis/tin_study.cpp
 )
 target_include_directories(factory_sim_view PUBLIC src)
-target_link_libraries(factory_sim_view PUBLIC factory_sim_core PRIVATE fmt::fmt)
+target_link_libraries(factory_sim_view PUBLIC factory_sim_core PRIVATE fmt::fmt nlohmann_json::nlohmann_json)
 
 # --- The 3D application ---
 if(FACTORY_SIM_BUILD_APP)
@@ -160,6 +162,7 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/analyser.cpp
     src/app/cameras.cpp
     src/app/widgets.cpp
+    src/app/files.cpp
     src/render/shader.cpp
     src/render/renderer.cpp
   )

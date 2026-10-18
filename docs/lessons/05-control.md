@@ -11,7 +11,7 @@ every 10 ms (a scan):
   devices ◄── outputs  %QX0.0 P1 valve              %QX0.1 C1 motor        lamps ...
 ```
 
-Try it: `./build/factory_sim`, **Load the sorting demo**, and watch the red boxes go into the bin. The **I/O** window shows each address's value as it happens.
+Try it: `./build/factory_sim`, **File > New from a demo > Sorting**, and watch the red boxes go into the bin. The **I/O** window shows each address's value as it happens.
 
 ---
 

@@ -1,6 +1,7 @@
 #pragma once
 #include "sim/scene.hpp"
 #include <cstddef>
+#include <functional>
 #include <vector>
 
 // Undo and redo for the scene, by snapshots: a Scene is a small value, so
@@ -28,6 +29,12 @@ public:
     bool canRedo() const { return !redo_.empty(); }
     void undo();
     void redo();
+
+    // A change that isn't an edit, made to every step: the current scene,
+    // the committed one and all those undo and redo would bring back. Save As
+    // rewrites relative paths this way, so undoing an edit doesn't bring back
+    // a path that was relative to the old folder. Not an undo step itself.
+    void changeEverywhere(const std::function<void(Scene&)>& change);
 
     static constexpr std::size_t kLimit = 200;
 

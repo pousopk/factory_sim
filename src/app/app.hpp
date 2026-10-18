@@ -1,6 +1,8 @@
 #pragma once
 #include "analysis/tin_study.hpp"
+#include "edit/file_browser.hpp"
 #include "edit/scene_history.hpp"
+#include "edit/settings.hpp"
 #include "render/orbit_camera.hpp"
 #include "render/renderer.hpp"
 #include "render/scene.hpp"
@@ -17,7 +19,8 @@
 // camera, and the panels.
 //
 // The scene is the source of truth. The panels edit it (with undo), it's
-// saved to a file after every change, and the world follows it: settings
+// saved to its file after every change (an untitled one to a scratch file
+// in the config folder, until Save As names it), and the world follows it: settings
 // that don't move anything (speeds, sensors, spawners) are applied to the
 // running world live; a change to the layout builds a new world.
 //
@@ -28,15 +31,36 @@ namespace fsim {
 
 class App {
 public:
-    // Loads the scene from `scenePath` if it exists (a new one otherwise),
-    // and saves it there after every change. Needs a current OpenGL context.
-    explicit App(std::filesystem::path scenePath);
+    // Opens `scenePath` (a new scene there if it doesn't exist); without one,
+    // the most recent scene, or the untitled one. Needs a current OpenGL context.
+    explicit App(std::optional<std::filesystem::path> scenePath);
 
     // One frame: handles the mouse and keys, draws the panels, follows the
     // scene's changes, advances the world by `realSeconds` (scaled), draws.
     void frame(double realSeconds, int width, int height);
 
+    // For the window's title bar: "conveyor_line.json - factory_sim".
+    std::string title() const;
+    bool wantsToQuit() const { return quit_; } // File > Quit
+
 private:
+    // Files (files.cpp): the menu bar, the Open and Save As dialog, and what
+    // they do.
+    void drawMenuBar();
+    void drawFileDialog();
+    void drawNewConfirmation();
+    // Opens a scene file: a fresh undo history and a new world. False (and
+    // the current scene kept) if it can't be read.
+    bool openScene(const std::filesystem::path& path);
+    void saveSceneAs(const std::filesystem::path& path);
+    // A new, untitled scene (empty, or a demo). The untitled scene's only
+    // copy is the scratch file, so replacing an edited one asks first.
+    void startNew(Scene scene);
+    void replaceScene(Scene scene, std::filesystem::path path); // and its file (empty: untitled)
+    void remember(const std::filesystem::path& path);           // in the recent list
+    std::filesystem::path savePath() const;                     // where autosave writes
+    std::filesystem::path sceneFolder() const;                  // what relative paths in the scene start from
+
     void handleMouse(int width, int height);
     void handleKeys();
     void drawMainPanel();
@@ -85,7 +109,8 @@ private:
 
     Scene& scene() { return history_.current(); }
 
-    std::filesystem::path scenePath_;
+    std::filesystem::path scenePath_; // empty: untitled
+    Settings settings_;
     SceneHistory history_;
     Scene applied_; // the scene the world was last made to follow
     std::unique_ptr<World> world_;
@@ -95,6 +120,25 @@ private:
     std::string fileStatus_;
     std::string programError_; // why the scene's control program couldn't start
     std::string variableFilter_;
+
+    // Files: the dialog open (if any), its folder and typed name, and a new
+    // scene waiting for "replace the untitled one?".
+    enum class Dialog { None, Open, SaveAs };
+    Dialog dialog_ = Dialog::None;
+    std::optional<FileBrowser> browser_;
+    std::string dialogName_;
+    std::string dialogError_; // why the last Open or Save didn't work
+    std::optional<Scene> pendingNew_;
+    bool quit_ = false;
+
+    // Which windows are shown (the View menu).
+    bool showLine_ = true;
+    bool showInspector_ = true;
+    bool showTriggers_ = true;
+    bool showIo_ = true;
+    bool showControlPanel_ = true;
+    bool showPlcVariables_ = true;
+    bool showCameras_ = true;
 
     // The logic analyser's state.
     bool showAnalyser_ = false;

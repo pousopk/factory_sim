@@ -22,7 +22,7 @@ void App::drawAnalyser() {
     if (!showAnalyser_) {
         return;
     }
-    ImGui::SetNextWindowPos(ImVec2(360, 330), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(360, 352), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(670, 430), ImGuiCond_FirstUseEver);
     if (!ImGui::Begin("Logic analyser", &showAnalyser_)) {
         ImGui::End();
@@ -228,7 +228,7 @@ void App::drawEventLog() {
     ImGui::InputTextWithHint("##filter", "filter: part of a name", &eventFilter_);
     ImGui::SameLine();
     if (ImGui::SmallButton("Export CSV")) {
-        const auto path = scenePath_.parent_path() / "events.csv";
+        const auto path = sceneFolder() / "events.csv";
         std::ofstream file(path, std::ios::binary);
         file << eventsCsv(log);
         exportStatus_ =

@@ -13,7 +13,7 @@ Milestone 8 builds the reference scenario from the README. Tins pass on a convey
                           K4 after a 150 ms timer ────────┘
 ```
 
-Try it: in `./build/factory_sim`, click **Load the tin demo**. Watch the **Cameras** window: K4's column shows `MISSED: no trigger` now and then, while K1-K3 never miss. Then open its **Gap study** tab and press **Study**.
+Try it: in `./build/factory_sim`, choose **File > New from a demo > Tins and cameras**. Watch the **Cameras** window: K4's column shows `MISSED: no trigger` now and then, while K1-K3 never miss. Then open its **Gap study** tab and press **Study**.
 
 ---
 

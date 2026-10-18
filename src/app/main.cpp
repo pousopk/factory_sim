@@ -1,9 +1,11 @@
 // factory_sim: a 3D factory simulator.
 //
-//   factory_sim                 the scene in factory_sim_scene.json (a new one if it doesn't exist)
-//   factory_sim my_line.json    another scene file
+//   factory_sim                 the scene opened last (or the untitled one)
+//   factory_sim my_line.json    that scene file (a new scene there if it doesn't exist)
 //
-// The scene is saved automatically after every change.
+// The scene is saved automatically after every change. factory_sim's own
+// files (recent scenes, the window layout, the untitled scene) are in
+// ~/.config/factory_sim.
 #include "app/app.hpp"
 #include "render/gl.hpp" // before GLFW, which would otherwise include the old OpenGL header
 #include <GLFW/glfw3.h>
@@ -14,13 +16,18 @@
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 #include <implot.h>
+#include <optional>
+#include <string>
 
 int main(int argc, char** argv) {
     if (argc > 2) {
         std::fprintf(stderr, "usage: factory_sim [scene.json]\n");
         return 2;
     }
-    const std::filesystem::path scenePath = argc == 2 ? argv[1] : "factory_sim_scene.json";
+    std::optional<std::filesystem::path> scenePath;
+    if (argc == 2) {
+        scenePath = argv[1];
+    }
     glfwSetErrorCallback(
         [](int error, const char* description) { std::fprintf(stderr, "GLFW error %d: %s\n", error, description); });
     if (!glfwInit()) {
@@ -41,7 +48,12 @@ int main(int argc, char** argv) {
 
     ImGui::CreateContext();
     ImPlot::CreateContext(); // the logic analyser's plots
-    ImGui::GetIO().IniFilename = nullptr;
+    // The window layout is remembered, in the config folder (ImGui keeps the
+    // pointer: the string has to outlive the context).
+    std::error_code ignored;
+    std::filesystem::create_directories(fsim::configFolder(), ignored);
+    const std::string layoutFile = (fsim::configFolder() / "layout.ini").string();
+    ImGui::GetIO().IniFilename = layoutFile.c_str();
     ImGui::StyleColorsDark();
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 330 core");
@@ -50,7 +62,12 @@ int main(int argc, char** argv) {
     try {
         fsim::App app(scenePath); // after the OpenGL context: it creates shaders and buffers
         double last = glfwGetTime();
-        while (!glfwWindowShouldClose(window)) {
+        std::string title;
+        while (!glfwWindowShouldClose(window) && !app.wantsToQuit()) {
+            if (app.title() != title) {
+                title = app.title();
+                glfwSetWindowTitle(window, title.c_str());
+            }
             glfwPollEvents();
             ImGui_ImplOpenGL3_NewFrame();
             ImGui_ImplGlfw_NewFrame();

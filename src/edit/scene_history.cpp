@@ -36,4 +36,15 @@ void SceneHistory::redo() {
     current_ = committed_;
 }
 
+void SceneHistory::changeEverywhere(const std::function<void(Scene&)>& change) {
+    change(current_);
+    change(committed_);
+    for (auto& scene : undo_) {
+        change(scene);
+    }
+    for (auto& scene : redo_) {
+        change(scene);
+    }
+}
+
 } // namespace fsim

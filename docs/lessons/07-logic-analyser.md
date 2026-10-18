@@ -13,7 +13,7 @@ Trigger errors   histogram: the sensor's error, and the same as a 10 ms scan see
 Event log        21.480000  P1 valve  %QX0.0  0     ... Export CSV
 ```
 
-Try it: `./build/factory_sim`, **Load the sorting demo**, tick **Logic analyser** in the main panel.
+Try it: `./build/factory_sim`, **File > New from a demo > Sorting**, then **View > Logic analyser**.
 
 ---
 

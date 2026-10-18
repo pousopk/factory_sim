@@ -167,12 +167,15 @@ void App::drawCameraTriggering() {
 }
 
 void App::drawCameras() {
+    if (!showCameras_) {
+        return; // hidden (View menu)
+    }
     if (scene().cameras.empty()) {
         return;
     }
-    ImGui::SetNextWindowPos(ImVec2(360, 520), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(360, 542), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(670, 370), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Cameras");
+    ImGui::Begin("Cameras", &showCameras_);
     if (ImGui::BeginTabBar("cameras")) {
         if (ImGui::BeginTabItem("Which camera took which item")) {
             drawTinTable();
@@ -299,7 +302,7 @@ void App::drawGapStudy() {
     if (ImGui::Button(running ? "Studying..." : "Study")) {
         // The program for each run: the scene's, made fresh. soft_plc without
         // its monitor port: the running world's soft_plc holds it.
-        ProgramMaker make = [folder = scenePath_.parent_path()](const Scene& scene) {
+        ProgramMaker make = [folder = sceneFolder()](const Scene& scene) {
             auto quiet = scene;
             quiet.monitorPort = 0;
             return makeAnyProgram(quiet, folder).program;

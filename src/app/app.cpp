@@ -28,28 +28,44 @@ const char* turnName(Turn turn) {
 
 } // namespace
 
-App::App(std::filesystem::path scenePath) : scenePath_(std::move(scenePath)), history_(defaultScene()) {
-    if (std::filesystem::exists(scenePath_)) {
-        if (auto loaded = loadScene(scenePath_)) {
-            history_ = SceneHistory(std::move(*loaded));
-            fileStatus_ = "loaded " + scenePath_.filename().string();
-        } else {
+App::App(std::optional<std::filesystem::path> scenePath)
+    : settings_(loadSettings(configFolder() / "settings.json")), history_(defaultScene()) {
+    if (scenePath && std::filesystem::exists(*scenePath)) {
+        if (!openScene(*scenePath)) {
             // Keep the unreadable file aside rather than overwrite it with the next save.
-            auto aside = scenePath_;
+            auto aside = *scenePath;
             aside += ".broken";
             std::error_code ignored;
-            std::filesystem::copy_file(scenePath_, aside, std::filesystem::copy_options::overwrite_existing, ignored);
-            fileStatus_ = loaded.error() + " (kept as " + aside.filename().string() + "; starting a new scene)";
+            std::filesystem::copy_file(*scenePath, aside, std::filesystem::copy_options::overwrite_existing, ignored);
+            fileStatus_ += " (kept as " + aside.filename().string() + "; starting a new scene)";
+            scenePath_ = *scenePath;
         }
+    } else if (scenePath) {
+        // A new scene, in the file named: it exists from the start.
+        scenePath_ = std::filesystem::absolute(*scenePath).lexically_normal();
+        if (auto saved = saveScene(scene(), scenePath_); saved) {
+            remember(scenePath_);
+            fileStatus_ = "a new scene in " + scenePath_.filename().string();
+        } else {
+            fileStatus_ = saved.error();
+        }
+    } else if (!(!settings_.recent.empty() && openScene(settings_.recent.front()))) {
+        // Nothing named, nothing recent: the untitled scene, as it was left.
+        if (auto untitled = loadScene(savePath())) {
+            history_ = SceneHistory(std::move(*untitled));
+        }
+        fileStatus_ = "untitled";
     }
-    rebuildWorld();
+    if (!world_) {
+        rebuildWorld();
+    }
 }
 
 void App::rebuildWorld() {
     world_.reset();
     programError_.clear();
     world_ = buildWorld(scene(), [this](const Scene& s) {
-        auto made = makeAnyProgram(s, scenePath_.parent_path());
+        auto made = makeAnyProgram(s, sceneFolder());
         programError_ = made.error;
         return std::move(made.program);
     });
@@ -58,7 +74,7 @@ void App::rebuildWorld() {
 
 void App::replaceProgram() {
     world_->setProgram(nullptr);
-    auto made = makeAnyProgram(scene(), scenePath_.parent_path());
+    auto made = makeAnyProgram(scene(), sceneFolder());
     programError_ = made.error;
     world_->setProgram(std::move(made.program));
 }
@@ -66,6 +82,7 @@ void App::replaceProgram() {
 void App::frame(double realSeconds, int width, int height) {
     handleMouse(width, height);
     handleKeys();
+    drawMenuBar();
     drawMainPanel();
     drawLinePanel();
     drawInspector();
@@ -75,11 +92,14 @@ void App::frame(double realSeconds, int width, int height) {
     drawPlcVariables();
     drawAnalyser();
     drawCameras();
+    drawFileDialog();
+    drawNewConfirmation();
 
     // An edit is finished when no widget is being used: then it's one undo step, saved at once.
     if (!ImGui::IsAnyItemActive() && history_.commit()) {
-        if (auto saved = saveScene(scene(), scenePath_); saved) {
-            fileStatus_ = "saved " + scenePath_.filename().string();
+        if (auto saved = saveScene(scene(), savePath()); saved) {
+            fileStatus_ = scenePath_.empty() ? "untitled (saved in the config folder)"
+                                             : "saved " + scenePath_.filename().string();
         } else {
             fileStatus_ = saved.error();
         }
@@ -273,7 +293,7 @@ std::optional<std::size_t> App::selectedConveyor() const {
 // ---------------------------------------------------------------- Panels
 
 void App::drawMainPanel() {
-    ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(10, 32), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(340, 0), ImGuiCond_FirstUseEver);
     ImGui::Begin("factory_sim");
 
@@ -332,11 +352,8 @@ void App::drawMainPanel() {
     ImGui::TextColored(fileStatus_.find("can't") != std::string::npos || fileStatus_.find("isn't") != std::string::npos
                            ? kProblem
                            : kDim,
-                       "%s", fileStatus_.empty() ? scenePath_.string().c_str() : fileStatus_.c_str());
+                       "%s", fileStatus_.empty() ? savePath().string().c_str() : fileStatus_.c_str());
     ImGui::PopTextWrapPos();
-
-    ImGui::Checkbox("Logic analyser", &showAnalyser_);
-    ImGui::SetItemTooltip("Every signal over time, trigger error histograms, and the event log");
 
     ImGui::SeparatorText("Camera");
     ImGui::TextColored(kDim,
@@ -346,9 +363,12 @@ void App::drawMainPanel() {
 
 // Everything in the line, to select, and buttons to add and remove things.
 void App::drawLinePanel() {
-    ImGui::SetNextWindowPos(ImVec2(10, 450), ImGuiCond_FirstUseEver);
+    if (!showLine_) {
+        return; // hidden (View menu)
+    }
+    ImGui::SetNextWindowPos(ImVec2(10, 472), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(340, 330), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Line");
+    ImGui::Begin("Line", &showLine_);
     auto& s = scene();
     const auto selectable = [&](const std::string& label, Pick pick) {
         if (ImGui::Selectable(label.c_str(), selected_ == pick)) {
@@ -473,9 +493,12 @@ void App::drawLinePanel() {
 }
 
 void App::drawInspector() {
-    ImGui::SetNextWindowPos(ImVec2(1040, 240), ImGuiCond_FirstUseEver);
+    if (!showInspector_) {
+        return; // hidden (View menu)
+    }
+    ImGui::SetNextWindowPos(ImVec2(1040, 262), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(350, 0), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Inspector");
+    ImGui::Begin("Inspector", &showInspector_);
     if (!selected_) {
         ImGui::TextColored(kDim, "Click something in the view, or in the Line panel.");
     } else {
@@ -684,6 +707,9 @@ void App::drawSpawnerInspector(std::size_t index) {
 // beam was blocked, when the output switched, and how far past the beam the
 // box's front was by then, also as a PLC scanning every few ms would see it.
 void App::drawTriggers() {
+    if (!showTriggers_) {
+        return; // hidden (View menu)
+    }
     if (world_->photocells().empty()) {
         return;
     }
@@ -692,9 +718,9 @@ void App::drawTriggers() {
             ? selected_->index
             : 0;
     const auto& photocell = world_->photocells()[index];
-    ImGui::SetNextWindowPos(ImVec2(1040, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(1040, 32), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(350, 220), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Triggers");
+    ImGui::Begin("Triggers", &showTriggers_);
     ImGui::Text("%s", photocell.spec.name.c_str());
     ImGui::SameLine();
     ImGui::SetNextItemWidth(140.0F);
@@ -921,26 +947,7 @@ void App::drawControl() {
     ImGui::SetItemTooltip("What drives the valves and motors, scan by scan (every 10 ms), through the I/O:\n"
                           "soft_plc runs an ST program in step with the simulation; an S7 PLC runs on its own.");
     ImGui::TextColored(kDim, "%zu boxes made, %zu bad", world_->spawned(), world_->spawnedNok());
-    if (ImGui::SmallButton("Load the sorting demo")) {
-        s = sortingDemo(); // one undo step, like any other change
-        selected_.reset();
-    }
-    ImGui::SetItemTooltip("A conveyor, a third of the boxes bad, an inspection sensor, a pusher, a bin,\n"
-                          "and the built-in sorter wired to them. Ctrl+Z brings your scene back.");
-    ImGui::SameLine();
-    if (ImGui::SmallButton("Load the conveyor demo")) {
-        s = conveyorDemo(FACTORY_SIM_EXAMPLES_DIR "/conveyor.st");
-        s.monitorPort = 5020;
-        selected_.reset();
-    }
-    ImGui::SetItemTooltip("ladder_editor's conveyor program, run by soft_plc, on a line wired to its addresses.\n"
-                          "Press Start on the control panel. ladder_editor can go online with --connect=5020.");
-    if (ImGui::SmallButton("Load the tin demo")) {
-        s = tinDemo();
-        selected_.reset();
-    }
-    ImGui::SetItemTooltip("Tins at 1 m/s, one photocell triggering four cameras; the fourth, further on,\n"
-                          "through a timer in the PLC. Watch the Cameras window.");
+    ImGui::TextColored(kDim, "Demos: File > New from a demo");
     if (!programError_.empty()) {
         ImGui::PushTextWrapPos(0.0F);
         ImGui::TextColored(kProblem, "%s", programError_.c_str());
@@ -1027,9 +1034,12 @@ void App::drawControl() {
 // Every address in the scene, with what it is and its value now: the PLC's
 // view of the line, like the I/O table of a PLC project.
 void App::drawIoTable() {
-    ImGui::SetNextWindowPos(ImVec2(1040, 640), ImGuiCond_FirstUseEver);
+    if (!showIo_) {
+        return; // hidden (View menu)
+    }
+    ImGui::SetNextWindowPos(ImVec2(1040, 662), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(350, 250), ImGuiCond_FirstUseEver);
-    ImGui::Begin("I/O");
+    ImGui::Begin("I/O", &showIo_);
     struct Row {
         std::string address;
         std::string what;
@@ -1106,9 +1116,12 @@ void App::drawIoTable() {
 // holds them, latching ones toggle) and lamps the program lights. Below,
 // the list of them to edit.
 void App::drawControlPanel() {
-    ImGui::SetNextWindowPos(ImVec2(360, 770), ImGuiCond_FirstUseEver);
+    if (!showControlPanel_) {
+        return; // hidden (View menu)
+    }
+    ImGui::SetNextWindowPos(ImVec2(360, 792), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(560, 120), ImGuiCond_FirstUseEver);
-    ImGui::Begin("Control panel");
+    ImGui::Begin("Control panel", &showControlPanel_);
     auto& s = scene();
     for (std::size_t i = 0; i < world_->buttons().size(); ++i) {
         const auto& button = world_->buttons()[i];
@@ -1262,13 +1275,16 @@ void App::drawPlcStatus() {
 
 // soft_plc's variables, live: everything the program has, as it has it.
 void App::drawPlcVariables() {
+    if (!showPlcVariables_) {
+        return; // hidden (View menu)
+    }
     const auto* plc = dynamic_cast<const SoftPlcProgram*>(world_->program());
     if (plc == nullptr) {
         return;
     }
-    ImGui::SetNextWindowPos(ImVec2(360, 10), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowPos(ImVec2(360, 32), ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(330, 300), ImGuiCond_FirstUseEver);
-    ImGui::Begin("PLC variables");
+    ImGui::Begin("PLC variables", &showPlcVariables_);
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputTextWithHint("##filter", "filter: part of a name", &variableFilter_);
     if (ImGui::BeginTable("variables", 3, ImGuiTableFlags_Borders | ImGuiTableFlags_RowBg | ImGuiTableFlags_ScrollY)) {

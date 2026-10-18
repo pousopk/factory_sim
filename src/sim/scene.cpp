@@ -1089,4 +1089,17 @@ tl::expected<Scene, std::string> loadScene(const std::filesystem::path& path) {
     return scene;
 }
 
+void moveScene(Scene& scene, const std::filesystem::path& from, const std::filesystem::path& to) {
+    if (scene.plcProgram.empty()) {
+        return;
+    }
+    const std::filesystem::path program = scene.plcProgram;
+    if (program.is_absolute()) {
+        return;
+    }
+    const auto file = std::filesystem::absolute(from / program).lexically_normal();
+    const auto relative = file.lexically_relative(std::filesystem::absolute(to).lexically_normal());
+    scene.plcProgram = relative.empty() ? file.string() : relative.string();
+}
+
 } // namespace fsim

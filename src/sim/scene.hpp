@@ -180,4 +180,10 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text);
 tl::expected<void, std::string> saveScene(const Scene& scene, const std::filesystem::path& path);
 tl::expected<Scene, std::string> loadScene(const std::filesystem::path& path);
 
+// The scene is being saved in folder `to` instead of `from`: paths in it that
+// are relative to its folder (the soft_plc program) are rewritten to point
+// at the same files from there. Relative still if they can be, absolute if
+// not (another drive, say); absolute ones are left alone.
+void moveScene(Scene& scene, const std::filesystem::path& from, const std::filesystem::path& to);
+
 } // namespace fsim
