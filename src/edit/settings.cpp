@@ -17,6 +17,10 @@ std::filesystem::path configFolder() {
     return std::filesystem::current_path() / ".factory_sim";
 }
 
+std::filesystem::path untitledFile() {
+    return configFolder() / "untitled.json";
+}
+
 void addRecent(Settings& settings, const std::filesystem::path& scene) {
     // Absolute and without "a/../b", so the same file is always the same entry.
     const auto path = std::filesystem::absolute(scene).lexically_normal();
@@ -65,6 +69,14 @@ tl::expected<void, std::string> saveSettings(const Settings& settings, const std
         return tl::unexpected("can't write " + file.string());
     }
     return {};
+}
+
+std::optional<Scene> untitledWork(const std::filesystem::path& file) {
+    auto scene = loadScene(file);
+    if (!scene || *scene == Scene{}) {
+        return std::nullopt;
+    }
+    return std::move(*scene);
 }
 
 } // namespace fsim

@@ -30,7 +30,7 @@ const char* turnName(Turn turn) {
 } // namespace
 
 App::App(std::optional<std::filesystem::path> scenePath)
-    : settings_(loadSettings(configFolder() / "settings.json")), history_(defaultScene()) {
+    : settings_(loadSettings(configFolder() / "settings.json")), history_(Scene{}) {
     if (scenePath && std::filesystem::exists(*scenePath)) {
         if (!openScene(*scenePath)) {
             // Keep the unreadable file aside rather than overwrite it with the next save.
@@ -50,12 +50,9 @@ App::App(std::optional<std::filesystem::path> scenePath)
         } else {
             fileStatus_ = saved.error();
         }
-    } else if (!(!settings_.recent.empty() && openScene(settings_.recent.front()))) {
-        // Nothing named, nothing recent: the untitled scene, as it was left.
-        if (auto untitled = loadScene(savePath())) {
-            history_ = SceneHistory(std::move(*untitled));
-        }
-        fileStatus_ = "untitled";
+    } else {
+        startPage_ = true; // nothing named: choose what to do
+        untitledLeft_ = untitledWork(untitledFile()).has_value();
     }
     if (!world_) {
         rebuildWorld();
@@ -81,6 +78,15 @@ void App::replaceProgram() {
 }
 
 void App::frame(double realSeconds, int width, int height) {
+    if (startPage_) {
+        // No line yet: nothing to run, draw or save, only what to do.
+        drawMenuBar();
+        drawStartPage();
+        drawHelp();
+        drawFileDialog();
+        drawNewConfirmation();
+        return;
+    }
     handleMouse(width, height);
     handleKeys();
     drawMenuBar();

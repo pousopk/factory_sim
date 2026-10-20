@@ -47,6 +47,7 @@ The simulator should reproduce this and answer: at a given conveyor speed and ti
 15. Camera images: what area and line-scan cameras see, with motion blur and noise
 16. A better window: docked panels around the 3D view, a toolbar and status bar, a proper font and theme
 17. Finding your way: the Line panel as a tree, hover tooltips in the 3D view, items you can select
+18. A start page: what to do when factory_sim starts, instead of the last scene
 
 ## Building
 
@@ -78,11 +79,13 @@ The first configure downloads its dependencies (Jolt Physics, glm, Dear ImGui, I
 ## Using it
 
 ```bash
-./build/factory_sim                 # the scene opened last (or the untitled one)
-./build/factory_sim my_line.json    # that scene (a new one there if the file doesn't exist)
+./build/factory_sim                 # the start page
+./build/factory_sim my_line.json    # that scene (a new, empty one there if the file doesn't exist)
 ```
 
-The scene is saved after every change; there's no Save button and the file isn't meant to be edited by hand. The **File** menu has **New**, **New from a demo**, **Open...** (Ctrl+O), **Open recent** and **Save as...** (Ctrl+Shift+S). A new scene, or a demo, is *untitled*: it's still saved after every change, to a scratch file, until Save as gives it a name and a folder; replacing an edited untitled scene asks first. Save as keeps a soft_plc program path that's relative to the scene pointing at the same file from the new folder. **View** shows and hides each window. factory_sim keeps its own files in `~/.config/factory_sim` (or `$XDG_CONFIG_HOME/factory_sim`): the recent scenes, the window layout, and the untitled scene.
+**The start page.** Started without a scene, factory_sim shows a start page instead of a line: **New empty line**, **Open...**, the recent scenes (with **Continue untitled** at the top when the untitled scene left last time has something in it), and every demo as a tile with what it shows. **File > Close scene** goes back to it.
+
+The scene is saved after every change; there's no Save button and the file isn't meant to be edited by hand. The **File** menu has **New** (Ctrl+N, an empty floor), **New from a demo**, **Open...** (Ctrl+O), **Open recent**, **Save as...** (Ctrl+Shift+S) and **Close scene**. A new scene, or a demo, is *untitled*: it's still saved after every change, to a scratch file, until Save as gives it a name and a folder; replacing an edited untitled scene asks first. Save as keeps a soft_plc program path that's relative to the scene pointing at the same file from the new folder. **View** shows and hides each window. factory_sim keeps its own files in `~/.config/factory_sim` (or `$XDG_CONFIG_HOME/factory_sim`): the recent scenes, the window layout, and the untitled scene.
 
 **The window.** The 3D view sits in the middle, with the panels docked around it: building on the left (Control, Line, Inspector), watching on the right (I/O, Triggers, PLC variables, Cameras), time underneath (Logic analyser, Camera view, Operator panel). Drag a panel's tab to move it, dock it elsewhere or float it; the arrangement is remembered, and **View > Reset layout** puts it back. The toolbar runs time; the status bar says whether the simulation keeps up with real time, what drawing costs, and the file. **Help > Mouse and keys** (F1) lists them all. The font is Roboto (from Dear ImGui's fonts, Apache 2.0 licence), built into the program.
 
@@ -130,7 +133,7 @@ The scene is saved after every change; there's no Save button and the file isn't
 | `src/plc/` | The PLC link: soft_plc in lockstep (`soft_plc_program.hpp`), a live PLC over S7 (`s7_link.hpp`) |
 | `examples/` | The conveyor line and ladder_editor's conveyor program exported to ST; the tin line's camera triggering in ST; a drive driven over PROFIdrive telegram 1 (`drive.st`); the line equipment's and the merge's sequences (`equipment.st`, `merge.st`) |
 | `src/render/` | What to draw and what a click hits (`scene.hpp`) and from where (`orbit_camera.hpp`), all plain geometry; the OpenGL renderer and shaders |
-| `src/app/` | The application: window, frame loop, panels (`app.cpp`), the logic analyser (`analyser.cpp`), the cameras' panels (`cameras.cpp`), shared widgets |
+| `src/app/` | The application: window, frame loop, panels (`app.cpp`), the logic analyser (`analyser.cpp`), the cameras' panels (`cameras.cpp`), the start page and the demos (`welcome.cpp`), shared widgets |
 | `tools/` | `factory_sim_bench`, the simulation step benchmark |
 | `tests/` | doctest unit tests, mirroring `src/`; they run the simulation headless |
 | `docs/lessons/` | What each milestone teaches, with review questions |

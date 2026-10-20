@@ -1,6 +1,8 @@
 #pragma once
+#include "sim/scene.hpp"
 #include <cstddef>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <tl/expected.hpp>
 #include <vector>
@@ -14,6 +16,8 @@ namespace fsim {
 // $XDG_CONFIG_HOME/factory_sim, or ~/.config/factory_sim without it (or the
 // current folder, if there's no home either). Not created here.
 std::filesystem::path configFolder();
+// Where an untitled scene is saved until Save as names it: in the config folder.
+std::filesystem::path untitledFile();
 
 struct Settings {
     std::vector<std::filesystem::path> recent; // most recent first, absolute
@@ -31,5 +35,10 @@ void addRecent(Settings& settings, const std::filesystem::path& scene);
 Settings loadSettings(const std::filesystem::path& file);
 // Creates the folder if needed.
 tl::expected<void, std::string> saveSettings(const Settings& settings, const std::filesystem::path& file);
+
+// The untitled scene left in `file` last time, if there's anything in it to
+// go back to: the start page offers it. Not if it's missing, unreadable or
+// an empty floor.
+std::optional<Scene> untitledWork(const std::filesystem::path& file);
 
 } // namespace fsim

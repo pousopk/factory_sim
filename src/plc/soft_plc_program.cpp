@@ -77,8 +77,8 @@ tl::expected<std::unique_ptr<SoftPlcProgram>, std::string> SoftPlcProgram::fromS
         } catch (const std::system_error& error) {
             return tl::unexpected(fmt::format("can't listen for monitoring on port {}: {}", monitorPort, error.what()));
         }
-        state->service =
-            std::make_unique<softplc::monitor::MonitorService>(*state->program, state->image, *state->cycle);
+        state->service = std::make_unique<softplc::monitor::MonitorService>(*state->program, state->image,
+                                                                            *state->cycle, state->source);
     }
     return std::unique_ptr<SoftPlcProgram>(new SoftPlcProgram(std::move(state)));
 }

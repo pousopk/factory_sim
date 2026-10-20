@@ -15,10 +15,6 @@ namespace fsim {
 
 namespace {
 
-std::filesystem::path untitledFile() {
-    return configFolder() / "untitled.json";
-}
-
 std::filesystem::path settingsFile() {
     return configFolder() / "settings.json";
 }
@@ -26,6 +22,9 @@ std::filesystem::path settingsFile() {
 } // namespace
 
 std::string App::title() const {
+    if (startPage_) {
+        return "factory_sim";
+    }
     return (scenePath_.empty() ? std::string("untitled") : scenePath_.filename().string()) + " - factory_sim";
 }
 
@@ -47,6 +46,7 @@ void App::remember(const std::filesystem::path& path) {
 void App::replaceScene(Scene scene, std::filesystem::path path) {
     history_ = SceneHistory(std::move(scene)); // a new file starts a new undo history
     scenePath_ = path.empty() ? path : std::filesystem::absolute(path).lexically_normal();
+    startPage_ = false;
     selected_.reset();
     firing_.clear();
     study_.clear();
@@ -83,17 +83,40 @@ void App::saveSceneAs(const std::filesystem::path& path) {
 
 void App::startNew(Scene scene) {
     // The untitled scene exists only in the scratch file: replacing one that
-    // was edited would lose it, so that asks first.
-    if (scenePath_.empty() && history_.canUndo()) {
+    // was edited would lose it, so that asks first. From the start page, the
+    // one left in the scratch file counts.
+    const bool atRisk =
+        startPage_ ? untitledLeft_ : scenePath_.empty() && history_.canUndo();
+    if (atRisk) {
         pendingNew_ = std::move(scene);
         return;
     }
+    beginNew(std::move(scene));
+}
+
+void App::beginNew(Scene scene) {
     replaceScene(std::move(scene), {});
     if (auto saved = saveScene(this->scene(), untitledFile()); !saved) {
         fileStatus_ = saved.error();
     } else {
         fileStatus_ = "a new, untitled scene";
     }
+}
+
+void App::continueUntitled() {
+    if (auto untitled = untitledWork(untitledFile())) {
+        replaceScene(std::move(*untitled), {});
+        fileStatus_ = "untitled";
+    }
+}
+
+void App::closeScene() {
+    // Every change is already saved (an untitled scene in the scratch file,
+    // which the start page offers to continue): nothing to ask.
+    replaceScene(Scene{}, {});
+    startPage_ = true;
+    untitledLeft_ = untitledWork(untitledFile()).has_value();
+    fileStatus_.clear();
 }
 
 void App::drawMenuBar() {
@@ -107,10 +130,10 @@ void App::drawMenuBar() {
     const auto& io = ImGui::GetIO();
     if (!io.WantTextInput && io.KeyCtrl) {
         if (ImGui::IsKeyPressed(ImGuiKey_N)) {
-            startNew(defaultScene());
+            startNew(Scene{});
         } else if (ImGui::IsKeyPressed(ImGuiKey_O)) {
             openDialog(Dialog::Open);
-        } else if (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S)) {
+        } else if (io.KeyShift && ImGui::IsKeyPressed(ImGuiKey_S) && !startPage_) {
             openDialog(Dialog::SaveAs);
         }
     }
@@ -119,50 +142,21 @@ void App::drawMenuBar() {
     }
     if (ImGui::BeginMenu("File")) {
         if (ImGui::MenuItem("New", "Ctrl+N")) {
-            startNew(defaultScene());
+            startNew(Scene{});
         }
+        ImGui::SetItemTooltip("An empty floor, untitled");
         if (ImGui::BeginMenu("New from a demo")) {
-            if (ImGui::MenuItem("Sorting")) {
-                startNew(sortingDemo());
+            for (const auto& demo : demos()) {
+                if (ImGui::MenuItem(demo.name)) {
+                    startNew(demo.make());
+                }
+                if (ImGui::BeginItemTooltip()) {
+                    ImGui::PushTextWrapPos(ImGui::GetFontSize() * 28.0F);
+                    ImGui::TextUnformatted(demo.description);
+                    ImGui::PopTextWrapPos();
+                    ImGui::EndTooltip();
+                }
             }
-            ImGui::SetItemTooltip("A conveyor, a third of the boxes bad, an inspection sensor, a pusher, a bin,\n"
-                                  "and the built-in sorter wired to them");
-            if (ImGui::MenuItem("Conveyor (soft_plc)")) {
-                auto demo = conveyorDemo(FACTORY_SIM_EXAMPLES_DIR "/conveyor.st");
-                demo.monitorPort = 5020;
-                startNew(std::move(demo));
-            }
-            ImGui::SetItemTooltip("ladder_editor's conveyor program, run by soft_plc, on a line wired to its\n"
-                                  "addresses. Press Start on the control panel; ladder_editor can go online\n"
-                                  "with --connect=5020.");
-            if (ImGui::MenuItem("Conveyor with a drive (soft_plc)")) {
-                startNew(driveDemo(FACTORY_SIM_EXAMPLES_DIR "/drive.st"));
-            }
-            ImGui::SetItemTooltip("A belt driven over PROFIdrive telegram 1 by examples/drive.st:\n"
-                                  "press Start, turn the Speed potentiometer");
-            if (ImGui::MenuItem("Line equipment (soft_plc)")) {
-                startNew(equipmentDemo(FACTORY_SIM_EXAMPLES_DIR "/equipment.st"));
-            }
-            ImGui::SetItemTooltip("An accumulation conveyor, a turntable and a lift, sequenced by\n"
-                                  "examples/equipment.st");
-            if (ImGui::MenuItem("Merge (soft_plc)")) {
-                startNew(mergeDemo(FACTORY_SIM_EXAMPLES_DIR "/merge.st"));
-            }
-            ImGui::SetItemTooltip("A side conveyor joining a main line, waiting for gaps (examples/merge.st)");
-            if (ImGui::MenuItem("Sensors")) {
-                startNew(sensorsDemo());
-            }
-            ImGui::SetItemTooltip("Boxes of different heights and tins past an inductive and a capacitive\n"
-                                  "proximity switch, a laser measuring heights, and a light curtain");
-            if (ImGui::MenuItem("Line-scan and area cameras")) {
-                startNew(cameraDemo());
-            }
-            ImGui::SetItemTooltip("A line-scan camera on the encoder and an area camera over one belt:\n"
-                                  "open View > Camera view");
-            if (ImGui::MenuItem("Tins and cameras")) {
-                startNew(tinDemo());
-            }
-            ImGui::SetItemTooltip("Tins at 1 m/s, one photocell triggering four cameras");
             ImGui::EndMenu();
         }
         ImGui::Separator();
@@ -181,9 +175,13 @@ void App::drawMenuBar() {
                 openScene(*chosen);
             }
         }
-        if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S")) {
+        if (ImGui::MenuItem("Save as...", "Ctrl+Shift+S", false, !startPage_)) {
             openDialog(Dialog::SaveAs);
         }
+        if (ImGui::MenuItem("Close scene", nullptr, false, !startPage_)) {
+            closeScene();
+        }
+        ImGui::SetItemTooltip("Back to the start page (the scene is already saved)");
         ImGui::TextColored(kDim, "(every change is saved at once)");
         ImGui::Separator();
         if (ImGui::MenuItem("Quit")) {
@@ -191,7 +189,7 @@ void App::drawMenuBar() {
         }
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("Edit")) {
+    if (ImGui::BeginMenu("Edit", !startPage_)) {
         if (ImGui::MenuItem("Undo", "Ctrl+Z", false, history_.canUndo())) {
             history_.undo();
         }
@@ -218,7 +216,7 @@ void App::drawMenuBar() {
         ImGui::TextDisabled("a conveyor across the floor. Shift: fine steps.");
         ImGui::EndMenu();
     }
-    if (ImGui::BeginMenu("View")) {
+    if (ImGui::BeginMenu("View", !startPage_)) {
         ImGui::MenuItem("Control", nullptr, &showControl_);
         ImGui::MenuItem("Line", nullptr, &showLine_);
         ImGui::MenuItem("Inspector", nullptr, &showInspector_);
@@ -245,6 +243,10 @@ void App::drawMenuBar() {
         ImGui::EndMenu();
     }
     // Which file this is, on the right.
+    if (startPage_) {
+        ImGui::EndMainMenuBar();
+        return;
+    }
     const auto name = scenePath_.empty() ? std::string("untitled (saved in the config folder)") : scenePath_.string();
     ImGui::SameLine(ImGui::GetWindowWidth() - ImGui::CalcTextSize(name.c_str()).x - 16.0F);
     ImGui::TextColored(kDim, "%s", name.c_str());
@@ -259,6 +261,9 @@ void App::drawNewConfirmation() {
         ImGui::TextUnformatted("The untitled scene hasn't been saved under a name: it would be lost.");
         if (ImGui::Button("Save it first...")) {
             pendingNew_.reset();
+            if (startPage_) {
+                continueUntitled(); // the one to save is in the scratch file
+            }
             dialog_ = Dialog::SaveAs;
             browser_.emplace(std::filesystem::current_path());
             dialogName_.clear();
@@ -269,8 +274,7 @@ void App::drawNewConfirmation() {
         if (ImGui::Button("Replace it")) {
             auto scene = std::move(*pendingNew_);
             pendingNew_.reset();
-            history_ = SceneHistory(scene); // so startNew doesn't ask again
-            startNew(std::move(scene));
+            beginNew(std::move(scene));
             ImGui::CloseCurrentPopup();
         }
         ImGui::SameLine();

@@ -124,3 +124,17 @@ TEST_CASE("A change made everywhere in the history isn't undone by undo") {
     CHECK(history.current().conveyors[0].spec.targetSpeed != 1.5F);
     CHECK(history.current().plcProgram == "../a/main.st");
 }
+
+TEST_CASE("The start page offers to continue the untitled scene only when there's something in it") {
+    TemporaryFolder folder;
+    const auto file = folder.path / "untitled.json";
+    CHECK_FALSE(untitledWork(file).has_value()); // never made
+    REQUIRE(saveScene(Scene{}, file).has_value());
+    CHECK_FALSE(untitledWork(file).has_value()); // a new line, left empty
+    REQUIRE(saveScene(defaultScene(), file).has_value());
+    const auto work = untitledWork(file);
+    REQUIRE(work.has_value());
+    CHECK(*work == defaultScene());
+    std::ofstream(file) << "{ not json";
+    CHECK_FALSE(untitledWork(file).has_value()); // nothing to continue from a damaged file
+}

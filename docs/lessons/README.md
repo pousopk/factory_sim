@@ -23,3 +23,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 15. What the cameras see | [15-camera-images.md](15-camera-images.md) |
 | 16. A better window | [16-the-window.md](16-the-window.md) |
 | 17. Finding your way | [17-finding-your-way.md](17-finding-your-way.md) |
+| 18. A start page | [18-the-start-page.md](18-the-start-page.md) |

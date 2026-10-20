@@ -199,6 +199,7 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/equipment.cpp
     src/app/editing.cpp
     src/app/camera_view.cpp
+    src/app/welcome.cpp
     src/render/shader.cpp
     src/render/renderer.cpp
   )

@@ -70,7 +70,7 @@ TEST_CASE("A runtime error stops the PLC with its outputs off; a compile error d
     CHECK(broken.error().find("line 2") != std::string::npos);
 }
 
-TEST_CASE("Monitoring: a client reads values and loads a new version, answered between cycles") {
+TEST_CASE("Monitoring: a client reads values, uploads the program and loads a new version, between cycles") {
     auto plc = load("PROGRAM Main\nVAR n : INT; q AT %QX0.0 : BOOL; END_VAR\n    n := n + 1;\nEND_PROGRAM\n", 15201);
     CHECK(plc->status().monitorPort == 15201);
     IoImage io;
@@ -78,11 +78,13 @@ TEST_CASE("Monitoring: a client reads values and loads a new version, answered b
     // ladder_editor's session does.
     std::atomic<bool> done{false};
     std::string read;
+    std::string uploaded;
     std::string loaded;
     std::thread client([&] {
         auto connection = softplc::monitor::MonitorClient::connect("127.0.0.1", 15201);
         REQUIRE(connection.has_value());
         read = connection->request("READ n").value_or("");
+        uploaded = connection->request("SOURCE").value_or("");
         loaded = connection
                      ->request("LOAD PROGRAM Main\\nVAR n : INT; q AT %QX0.0 : BOOL; END_VAR\\n"
                                "    n := n + 1;\\n    q := TRUE;\\nEND_PROGRAM")
@@ -95,6 +97,8 @@ TEST_CASE("Monitoring: a client reads values and loads a new version, answered b
     }
     client.join();
     CHECK(read.rfind("OK ", 0) == 0);
+    // The program running, as ladder_editor uploads it: escaped as for LOAD.
+    CHECK(uploaded == "OK PROGRAM Main\\nVAR n : INT; q AT %QX0.0 : BOOL; END_VAR\\n    n := n + 1;\\nEND_PROGRAM\\n");
     CHECK(loaded.rfind("OK kept=", 0) == 0); // an online change: n kept its count
     plc->scan(io, 100.0);
     CHECK(io.bit(kOut)); // the new version runs

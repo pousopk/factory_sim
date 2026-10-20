@@ -16,6 +16,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <vector>
 
 // The application: the scene being designed, the world running it, the
 // camera, and the panels.
@@ -31,17 +32,26 @@
 // paused).
 namespace fsim {
 
+// A demo line, for File > New from a demo and the start page (welcome.cpp).
+struct Demo {
+    const char* name;
+    const char* description;
+    Scene (*make)();
+};
+const std::vector<Demo>& demos();
+
 class App {
 public:
-    // Opens `scenePath` (a new scene there if it doesn't exist); without one,
-    // the most recent scene, or the untitled one. Needs a current OpenGL context.
+    // Opens `scenePath` (a new, empty scene there if it doesn't exist);
+    // without one, the start page. Needs a current OpenGL context.
     explicit App(std::optional<std::filesystem::path> scenePath);
 
     // One frame: handles the mouse and keys, draws the panels, follows the
     // scene's changes, advances the world by `realSeconds` (scaled), draws.
     void frame(double realSeconds, int width, int height);
 
-    // For the window's title bar: "conveyor_line.json - factory_sim".
+    // For the window's title bar: "conveyor_line.json - factory_sim" (just
+    // "factory_sim" on the start page).
     std::string title() const;
     bool wantsToQuit() const { return quit_; } // File > Quit
 
@@ -56,8 +66,15 @@ private:
     bool openScene(const std::filesystem::path& path);
     void saveSceneAs(const std::filesystem::path& path);
     // A new, untitled scene (empty, or a demo). The untitled scene's only
-    // copy is the scratch file, so replacing an edited one asks first.
+    // copy is the scratch file, so replacing an edited one asks first
+    // (startNew); beginNew doesn't ask.
     void startNew(Scene scene);
+    void beginNew(Scene scene);
+    // The start page (welcome.cpp): what to do, before any scene is open.
+    // Close scene goes back to it; the scene stays in its file.
+    void drawStartPage();
+    void continueUntitled();
+    void closeScene();
     void replaceScene(Scene scene, std::filesystem::path path); // and its file (empty: untitled)
     void remember(const std::filesystem::path& path);           // in the recent list
     std::filesystem::path savePath() const;                     // where autosave writes
@@ -139,6 +156,8 @@ private:
 
     Scene& scene() { return history_.current(); }
 
+    bool startPage_ = false;          // no scene open yet: the start page instead of the line
+    bool untitledLeft_ = false;       // and an untitled scene to continue, on it
     std::filesystem::path scenePath_; // empty: untitled
     Settings settings_;
     SceneHistory history_;

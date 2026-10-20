@@ -1,7 +1,7 @@
 // factory_sim: a 3D factory simulator.
 //
-//   factory_sim                 the scene opened last (or the untitled one)
-//   factory_sim my_line.json    that scene file (a new scene there if it doesn't exist)
+//   factory_sim                 the start page: a new line, a scene to open, or a demo
+//   factory_sim my_line.json    that scene file (a new, empty scene there if it doesn't exist)
 //
 // The scene is saved automatically after every change. factory_sim's own
 // files (recent scenes, the window layout, the untitled scene) are in
