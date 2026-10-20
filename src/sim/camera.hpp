@@ -1,4 +1,5 @@
 #pragma once
+#include "sim/placement.hpp"
 #include "sim/sensors.hpp"
 #include "sim/signal.hpp"
 #include <cstddef>
@@ -43,6 +44,7 @@ struct CameraSpec {
     CameraKind kind = CameraKind::Area;
     std::size_t conveyor = 0;
     float along = 1.5F;           // the middle of its field of view, metres from the belt's start
+    Placement place;              // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     float fieldOfView = 0.20F;    // how much of the belt it sees, along the travel, m
     int pixels = 1280;            // across the field of view, along the travel
     int pixelsAcross = 1024;      // across the belt (a line-scan camera's whole line)

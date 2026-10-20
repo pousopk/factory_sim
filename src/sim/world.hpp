@@ -7,6 +7,7 @@
 #include "sim/field_sensors.hpp"
 #include "sim/io.hpp"
 #include "sim/physics.hpp"
+#include "sim/placement.hpp"
 #include "sim/sensors.hpp"
 #include <cstdint>
 #include <deque>
@@ -63,6 +64,7 @@ struct SpawnerSpec {
     double intervalJitter = 0.0;       // ± random variation, seconds
     glm::vec3 size{0.2F, 0.15F, 0.2F}; // length (along the belt), height, width
     float offset = 0.2F;               // where boxes appear, metres from the belt's start
+    Placement place;                   // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     bool enabled = true;
     float nokFraction = 0.0F; // the share of boxes that are bad (NOK), at random: 0.25 = one in four
     // What it makes. Size is the items' bounding box (a tin's: diameter,
@@ -314,6 +316,12 @@ private:
     // `direction`: the lowest and the highest, and the larger of the two.
     static std::pair<float, float> span(const Item& item, const glm::mat3& rotation, glm::vec3 direction);
     static float reachOf(const Item& item, const glm::mat3& rotation, glm::vec3 direction);
+    // The belt a device is worked out on: its conveyor's (or, for one with
+    // none, any: its placement puts it on a stand-in).
+    template <class Spec> const ConveyorSpec& beltOf(const Spec& spec) const {
+        static const ConveyorSpec none;
+        return spec.conveyor < conveyors_.size() ? conveyors_[spec.conveyor].spec : none;
+    }
     JPH::BodyID addKinematic(const Pose& pose, float friction);
     JPH::BodyID addStatic(const Pose& pose, float friction);
 

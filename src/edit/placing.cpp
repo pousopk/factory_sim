@@ -1,4 +1,5 @@
 #include "edit/placing.hpp"
+#include "sim/mounting.hpp"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -73,8 +74,8 @@ namespace {
 // const for a const scene.
 template <class S, class F> bool withPlace(S& scene, Pick pick, F f) {
     const auto at = [&](auto& list) {
-        if (pick.index >= list.size()) {
-            return false;
+        if (pick.index >= list.size() || list[pick.index].place.parent == Parent::World) {
+            return false; // (one standing on its own has no place along a belt)
         }
         f(list[pick.index].conveyor, list[pick.index].along);
         return true;
@@ -101,7 +102,7 @@ template <class S, class F> bool withPlace(S& scene, Pick pick, F f) {
     case Pick::Kind::LightCurtain:
         return at(scene.curtains);
     case Pick::Kind::Spawner:
-        if (pick.index >= scene.spawners.size()) {
+        if (pick.index >= scene.spawners.size() || scene.spawners[pick.index].place.parent == Parent::World) {
             return false;
         }
         f(scene.spawners[pick.index].conveyor, scene.spawners[pick.index].offset);
@@ -252,6 +253,10 @@ Pick paste(Scene& scene, const Clip& clip, std::optional<std::size_t> conveyor, 
         const auto index = list.size() - 1;
         (rewire(scene, list[index].*fields), ...);
         const Pick pick{kind, index};
+        if (list[index].place.parent == Parent::World) {
+            list[index].place.offset.x += 0.2F; // standing on its own: beside the original
+            return pick;
+        }
         const float to = along ? *along : copy.along + 0.2F;
         moveAlong(scene, pick, to);
         return pick;
@@ -297,6 +302,11 @@ Pick paste(Scene& scene, const Clip& clip, std::optional<std::size_t> conveyor, 
                 if (conveyor && *conveyor < scene.conveyors.size()) {
                     copy.conveyor = *conveyor;
                 }
+                if (copy.place.parent == Parent::World) {
+                    copy.place.offset.x += 0.2F;
+                    scene.spawners.push_back(copy);
+                    return Pick{Pick::Kind::Spawner, scene.spawners.size() - 1};
+                }
                 scene.spawners.push_back(copy);
                 const Pick pick{Pick::Kind::Spawner, scene.spawners.size() - 1};
                 moveAlong(scene, pick, along ? *along : copy.offset + 0.2F);
@@ -330,6 +340,188 @@ Pick paste(Scene& scene, const Clip& clip, std::optional<std::size_t> conveyor, 
             }
         },
         clip);
+}
+
+// ---------------------------------------------------------------- Placing anywhere
+
+namespace {
+
+// Calls `f(spec, along)` with the device `pick` names (a spawner's along
+// is its offset), const for a const scene. False if it names no device.
+template <class S, class F> bool withDevice(S& scene, Pick pick, F f) {
+    const auto at = [&](auto& list) {
+        if (pick.index >= list.size()) {
+            return false;
+        }
+        f(list[pick.index], list[pick.index].along);
+        return true;
+    };
+    switch (pick.kind) {
+    case Pick::Kind::Photocell:
+        return at(scene.photocells);
+    case Pick::Kind::Pusher:
+        return at(scene.pushers);
+    case Pick::Kind::Diverter:
+        return at(scene.diverters);
+    case Pick::Kind::Stopper:
+        return at(scene.stoppers);
+    case Pick::Kind::AirJet:
+        return at(scene.airJets);
+    case Pick::Kind::Bin:
+        return at(scene.bins);
+    case Pick::Kind::Camera:
+        return at(scene.cameras);
+    case Pick::Kind::Proximity:
+        return at(scene.proximities);
+    case Pick::Kind::Laser:
+        return at(scene.lasers);
+    case Pick::Kind::LightCurtain:
+        return at(scene.curtains);
+    case Pick::Kind::Spawner:
+        if (pick.index >= scene.spawners.size()) {
+            return false;
+        }
+        f(scene.spawners[pick.index], scene.spawners[pick.index].offset);
+        return true;
+    case Pick::Kind::Conveyor:
+    case Pick::Kind::Item:
+    case Pick::Kind::None:
+        break;
+    }
+    return false;
+}
+
+// A device's conveyor, as placed, if it's on one that exists.
+const ConveyorSpec* beltOf(const std::vector<ConveyorSpec>& placed, const auto& spec) {
+    return spec.place.parent == Parent::Conveyor && spec.conveyor < placed.size() ? &placed[spec.conveyor] : nullptr;
+}
+
+const glm::vec3 kUp{0.0F, 1.0F, 0.0F};
+
+} // namespace
+
+const Placement* placementOf(const Scene& scene, Pick pick) {
+    const Placement* place = nullptr;
+    withDevice(scene, pick, [&](const auto& spec, float) { place = &spec.place; });
+    return place;
+}
+
+Placement* placementOf(Scene& scene, Pick pick) {
+    Placement* place = nullptr;
+    withDevice(scene, pick, [&](auto& spec, float) { place = &spec.place; });
+    return place;
+}
+
+std::optional<std::size_t> nearestConveyor(const Scene& scene, Pick pick) {
+    const auto target = gizmoTarget(scene, pick);
+    if (!target || pick.kind == Pick::Kind::Conveyor) {
+        return std::nullopt;
+    }
+    // The distance to each belt's centre line, at its surface.
+    const auto placed = placeConveyors(scene);
+    std::optional<std::size_t> best;
+    float nearest = std::numeric_limits<float>::max();
+    for (std::size_t i = 0; i < placed.size(); ++i) {
+        const auto& belt = placed[i];
+        const auto start = beltPoint(belt, 0.0F);
+        const auto along = directionOf(belt.heading);
+        const float t = std::clamp(glm::dot(target->frame.origin - start, along), 0.0F, belt.length);
+        const float d = glm::length(target->frame.origin - (start + along * t));
+        if (d < nearest) {
+            nearest = d;
+            best = i;
+        }
+    }
+    return best;
+}
+
+std::optional<GizmoTarget> gizmoTarget(const Scene& scene, Pick pick) {
+    const auto placed = placeConveyors(scene);
+    if (pick.kind == Pick::Kind::Conveyor) {
+        if (pick.index >= scene.conveyors.size() || scene.conveyors[pick.index].follows ||
+            scene.conveyors[pick.index].joins) {
+            return std::nullopt;
+        }
+        // It moves across the floor and up, and turns only about the vertical.
+        const auto& c = placed[pick.index];
+        return GizmoTarget{beltFrame(c, c.length / 2.0F), {true, true, true}, {false, true, false}};
+    }
+    std::optional<GizmoTarget> target;
+    withDevice(scene, pick, [&](const auto& spec, float along) {
+        target = GizmoTarget{placedFrame(spec.place, beltOf(placed, spec), along)};
+    });
+    return target;
+}
+
+void placeAt(Scene& scene, const Scene& original, Pick pick, const Frame& to) {
+    const auto placed = placeConveyors(original);
+    if (pick.kind == Pick::Kind::Conveyor) {
+        if (pick.index >= scene.conveyors.size() || pick.index >= original.conveyors.size()) {
+            return;
+        }
+        const auto& before = original.conveyors[pick.index].spec;
+        auto& spec = scene.conveyors[pick.index].spec;
+        // Its heading from where the frame's x points (only turned about the
+        // vertical); its start half its length back from the frame, on the
+        // floor; its belt at the frame's height.
+        const auto x = to.rotation * glm::vec3(1.0F, 0.0F, 0.0F);
+        spec.heading = std::atan2(-x.z, x.x);
+        const auto start = to.origin - directionOf(spec.heading) * (before.length / 2.0F);
+        spec.start = {start.x, before.start.y, start.z};
+        spec.beltHeight = std::max(0.05F, to.origin.y);
+        return;
+    }
+    const auto* scenePlace = placementOf(original, pick);
+    if (scenePlace == nullptr) {
+        return;
+    }
+    withDevice(original, pick, [&](const auto& before, float along) {
+        const auto* belt = beltOf(placed, before);
+        auto place = before.place;
+        float newAlong = along;
+        if (belt != nullptr) {
+            // Along the belt: its place along it; the rest: the nudge.
+            const auto start = placedFrame(before.place, belt, along);
+            const float moved = glm::dot(to.origin - start.origin, directionOf(belt->heading));
+            newAlong = std::clamp(along + moved, 0.0F, belt->length);
+            place = placementAt(to, Parent::Conveyor, belt, newAlong, place.span, place.height);
+        } else {
+            place = placementAt(to, Parent::World, nullptr, along, place.span, place.height);
+        }
+        withDevice(scene, pick, [&](auto& spec, float& a) {
+            spec.place = place;
+            a = newAlong;
+        });
+    });
+}
+
+void detach(Scene& scene, Pick pick) {
+    const auto placed = placeConveyors(scene);
+    withDevice(scene, pick, [&](auto& spec, float along) {
+        const auto* belt = beltOf(placed, spec);
+        if (belt == nullptr) {
+            return; // on its own already
+        }
+        // Worked out from now on on a stand-in as wide and high as its belt.
+        spec.place = placementAt(placedFrame(spec.place, belt, along), Parent::World, nullptr, along, belt->width,
+                                 belt->beltHeight);
+    });
+}
+
+void attach(Scene& scene, Pick pick, std::size_t conveyor) {
+    const auto placed = placeConveyors(scene);
+    if (conveyor >= placed.size()) {
+        return;
+    }
+    const auto& belt = placed[conveyor];
+    withDevice(scene, pick, [&](auto& spec, float& along) {
+        const auto here = placedFrame(spec.place, beltOf(placed, spec), along);
+        // Its usual place on that belt, as near as it can be to where it is.
+        const auto start = beltPoint(belt, 0.0F) - kUp * belt.beltHeight;
+        along = std::clamp(glm::dot(here.origin - start, directionOf(belt.heading)), 0.0F, belt.length);
+        spec.conveyor = conveyor;
+        spec.place = Placement{};
+    });
 }
 
 } // namespace fsim

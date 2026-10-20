@@ -37,7 +37,9 @@ void shiftDown(std::size_t& index, std::size_t removed) {
 // Everything in `items` that stood on conveyor `removed` goes; the rest
 // refers to its conveyor by an index that may shift.
 template <class Items> void dropFrom(Items& items, std::size_t removed) {
-    std::erase_if(items, [&](const auto& item) { return item.conveyor == removed; });
+    // (One standing on its own stays, wherever it is.)
+    std::erase_if(items,
+                  [&](const auto& item) { return item.place.parent == Parent::Conveyor && item.conveyor == removed; });
     for (auto& item : items) {
         shiftDown(item.conveyor, removed);
     }
@@ -508,19 +510,19 @@ std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make, 
     // rejects such files, so it only happens to a scene built by hand.)
     const auto exists = [&](std::size_t conveyor) { return conveyor < world->conveyors().size(); };
     for (const auto& pusher : scene.pushers) {
-        if (exists(pusher.conveyor))
+        if (exists(pusher.conveyor) || pusher.place.parent == Parent::World)
             world->addPusher(pusher);
     }
     for (const auto& diverter : scene.diverters) {
-        if (exists(diverter.conveyor))
+        if (exists(diverter.conveyor) || diverter.place.parent == Parent::World)
             world->addDiverter(diverter);
     }
     for (const auto& stopper : scene.stoppers) {
-        if (exists(stopper.conveyor))
+        if (exists(stopper.conveyor) || stopper.place.parent == Parent::World)
             world->addStopper(stopper);
     }
     for (const auto& bin : scene.bins) {
-        if (exists(bin.conveyor))
+        if (exists(bin.conveyor) || bin.place.parent == Parent::World)
             world->addBin(bin);
     }
     for (const auto& camera : scene.cameras) {
@@ -1316,6 +1318,34 @@ Mount mountFrom(const std::string& name) {
     return name == "above" ? Mount::Above : name == "right" ? Mount::Right : Mount::Left;
 }
 
+// A device's placement, written only when it isn't the usual one (so files
+// of devices on their belts look as they always did).
+void placeToJson(json& entry, const Placement& place) {
+    if (place == Placement{}) {
+        return;
+    }
+    entry["place"] = {{"parent", place.parent == Parent::World ? "world" : "conveyor"},
+                      {"offset", vec3(place.offset)},
+                      {"turn", {place.turn.w, place.turn.x, place.turn.y, place.turn.z}},
+                      {"span", place.span},
+                      {"height", place.height}};
+}
+
+void placeFrom(const json& entry, Placement& place) {
+    const auto& j = entry.value("place", json::object());
+    if (j.empty()) {
+        return;
+    }
+    place.parent = j.value("parent", std::string("conveyor")) == "world" ? Parent::World : Parent::Conveyor;
+    place.offset = vec3From(j.value("offset", json()), place.offset);
+    if (const auto& t = j.value("turn", json()); t.is_array() && t.size() == 4) {
+        place.turn =
+            glm::normalize(glm::quat(t[0].get<float>(), t[1].get<float>(), t[2].get<float>(), t[3].get<float>()));
+    }
+    place.span = j.value("span", place.span);
+    place.height = j.value("height", place.height);
+}
+
 const char* sideName(Side side) {
     return side == Side::Left ? "left" : "right";
 }
@@ -1546,6 +1576,23 @@ std::string sceneToJson(const Scene& scene) {
     for (const auto& l : scene.lamps) {
         data["lamps"].push_back({{"name", l.name}, {"address", l.address}});
     }
+    // Each device's placement, beside its other fields.
+    const auto places = [&](const char* key, const auto& devices) {
+        for (std::size_t i = 0; i < devices.size() && i < data[key].size(); ++i) {
+            placeToJson(data[key][i], devices[i].place);
+        }
+    };
+    places("photocells", scene.photocells);
+    places("spawners", scene.spawners);
+    places("pushers", scene.pushers);
+    places("diverters", scene.diverters);
+    places("stoppers", scene.stoppers);
+    places("airJets", scene.airJets);
+    places("bins", scene.bins);
+    places("cameras", scene.cameras);
+    places("proximities", scene.proximities);
+    places("lasers", scene.lasers);
+    places("curtains", scene.curtains);
     data["sorters"] = json::array();
     for (const auto& s : scene.sorters) {
         data["sorters"].push_back({{"name", s.name},
@@ -1652,9 +1699,10 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             }
             scene.conveyors.push_back(conveyor);
         }
-        const auto checkConveyor = [&](std::size_t index, const std::string& what) -> tl::expected<void, std::string> {
-            if (index >= scene.conveyors.size()) {
-                return tl::unexpected(fmt::format("{} is on conveyor {}, which doesn't exist", what, index));
+        // A device on a conveyor needs it to exist; one standing on its own doesn't.
+        const auto checkConveyor = [&](const auto& device, const std::string& what) -> tl::expected<void, std::string> {
+            if (device.place.parent == Parent::Conveyor && device.conveyor >= scene.conveyors.size()) {
+                return tl::unexpected(fmt::format("{} is on conveyor {}, which doesn't exist", what, device.conveyor));
             }
             return {};
         };
@@ -1670,7 +1718,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             photocell.responseTime = p.value("responseTime", photocell.responseTime);
             photocell.input = p.value("input", std::string());
             photocell.onlyNok = p.value("onlyNok", false);
-            if (auto ok = checkConveyor(photocell.conveyor, "photocell " + photocell.name); !ok) {
+            placeFrom(p, photocell.place);
+            if (auto ok = checkConveyor(photocell, "photocell " + photocell.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.photocells.push_back(photocell);
@@ -1700,7 +1749,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             }
             spawner.heightJitter = s.value("heightJitter", 0.0F);
             spawner.atBeltSpeed = s.value("atBeltSpeed", false);
-            if (auto ok = checkConveyor(spawner.conveyor, "a spawner"); !ok) {
+            placeFrom(s, spawner.place);
+            if (auto ok = checkConveyor(spawner, "a spawner"); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.spawners.push_back(spawner);
@@ -1714,7 +1764,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             p.paddleLength = j.value("paddleLength", p.paddleLength);
             p.stroke = strokeFrom(j.value("stroke", json()), p.stroke);
             ioFromJson(j, p);
-            if (auto ok = checkConveyor(p.conveyor, "pusher " + p.name); !ok) {
+            placeFrom(j, p.place);
+            if (auto ok = checkConveyor(p, "pusher " + p.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.pushers.push_back(p);
@@ -1728,7 +1779,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             d.angle = j.value("angle", d.angle);
             d.stroke = strokeFrom(j.value("stroke", json()), d.stroke);
             ioFromJson(j, d);
-            if (auto ok = checkConveyor(d.conveyor, "diverter " + d.name); !ok) {
+            placeFrom(j, d.place);
+            if (auto ok = checkConveyor(d, "diverter " + d.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.diverters.push_back(d);
@@ -1741,7 +1793,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             s.height = j.value("height", s.height);
             s.stroke = strokeFrom(j.value("stroke", json()), s.stroke);
             ioFromJson(j, s);
-            if (auto ok = checkConveyor(s.conveyor, "stopper " + s.name); !ok) {
+            placeFrom(j, s.place);
+            if (auto ok = checkConveyor(s, "stopper " + s.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.stoppers.push_back(s);
@@ -1762,7 +1815,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             a.openTime = j.value("openTime", a.openTime);
             a.closeTime = j.value("closeTime", a.closeTime);
             a.valveOutput = j.value("valveOutput", std::string());
-            if (auto ok = checkConveyor(a.conveyor, "air jet " + a.name); !ok) {
+            placeFrom(j, a.place);
+            if (auto ok = checkConveyor(a, "air jet " + a.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.airJets.push_back(a);
@@ -1774,7 +1828,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             b.along = j.value("along", b.along);
             b.side = sideFrom(j.value("side", json()), b.side);
             b.size = vec3From(j.value("size", json()), b.size);
-            if (auto ok = checkConveyor(b.conveyor, "bin " + b.name); !ok) {
+            placeFrom(j, b.place);
+            if (auto ok = checkConveyor(b, "bin " + b.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.bins.push_back(b);
@@ -1801,7 +1856,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
                                                                                          : LineTrigger::FreeRun;
             c.lineRate = j.value("lineRate", c.lineRate);
             c.pulsesPerLine = j.value("pulsesPerLine", c.pulsesPerLine);
-            if (auto ok = checkConveyor(c.conveyor, "camera " + c.name); !ok) {
+            placeFrom(j, c.place);
+            if (auto ok = checkConveyor(c, "camera " + c.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.cameras.push_back(c);
@@ -1819,7 +1875,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             p.inset = j.value("inset", p.inset);
             p.responseTime = j.value("responseTime", p.responseTime);
             p.input = j.value("input", std::string());
-            if (auto ok = checkConveyor(p.conveyor, "proximity switch " + p.name); !ok) {
+            placeFrom(j, p.place);
+            if (auto ok = checkConveyor(p, "proximity switch " + p.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.proximities.push_back(p);
@@ -1837,7 +1894,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             l.noise = j.value("noise", l.noise);
             l.measureTime = j.value("measureTime", l.measureTime);
             l.output = j.value("output", std::string());
-            if (auto ok = checkConveyor(l.conveyor, "laser " + l.name); !ok) {
+            placeFrom(j, l.place);
+            if (auto ok = checkConveyor(l, "laser " + l.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.lasers.push_back(l);
@@ -1853,7 +1911,8 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             c.scanTime = j.value("scanTime", c.scanTime);
             c.clearInput = j.value("clearInput", std::string());
             c.countInput = j.value("countInput", std::string());
-            if (auto ok = checkConveyor(c.conveyor, "light curtain " + c.name); !ok) {
+            placeFrom(j, c.place);
+            if (auto ok = checkConveyor(c, "light curtain " + c.name); !ok) {
                 return tl::unexpected(ok.error());
             }
             scene.curtains.push_back(c);

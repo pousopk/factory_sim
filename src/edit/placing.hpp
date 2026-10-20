@@ -1,6 +1,7 @@
 #pragma once
 #include "render/scene.hpp"
 #include "sim/scene.hpp"
+#include <array>
 #include <cstddef>
 #include <optional>
 #include <utility>
@@ -44,6 +45,37 @@ void moveAlong(Scene& scene, Pick pick, float along);
 // A new device of `kind` on `conveyor` at `along` (click to place), wired to
 // free addresses. Nothing for a kind that doesn't sit on a conveyor.
 std::optional<Pick> addAt(Scene& scene, Pick::Kind kind, std::size_t conveyor, float along);
+
+// What the gizmo shows for `pick`: the frame it moves and turns (a device's
+// usual place, nudged, or where it stands; a conveyor's middle, at its belt,
+// turned with it), and which of its arrows and rings it has. A conveyor
+// that follows or joins another is placed by it: none.
+struct GizmoTarget {
+    Frame frame;
+    std::array<bool, 3> canMove{true, true, true};
+    std::array<bool, 3> canTurn{true, true, true};
+};
+std::optional<GizmoTarget> gizmoTarget(const Scene& scene, Pick pick);
+
+// Puts `pick` where the gizmo has moved its frame to, `to`, starting again
+// from `original` (the scene when the drag began), so a long drag doesn't
+// pile up rounding. A device on a belt slides along it as far as the move
+// goes along the belt, the rest is its nudge; one standing on its own goes
+// there. A conveyor moves, rises and turns about its middle.
+void placeAt(Scene& scene, const Scene& original, Pick pick, const Frame& to);
+
+// Takes a device off its conveyor, leaving it exactly where it is
+// (standing on its own), or puts it on `conveyor` at its usual place
+// nearest to where it is now.
+void detach(Scene& scene, Pick pick);
+void attach(Scene& scene, Pick pick, std::size_t conveyor);
+// A device's placement, and whether it's on a belt as usual (sensing as it
+// always has), nudged, or on its own.
+const Placement* placementOf(const Scene& scene, Pick pick);
+Placement* placementOf(Scene& scene, Pick pick);
+// The conveyor nearest to where a device is (its usual place, or where it
+// stands): the one to put it on.
+std::optional<std::size_t> nearestConveyor(const Scene& scene, Pick pick);
 
 // What Ctrl+C keeps: a copy of one thing in the scene.
 using Clip = std::variant<PlacedConveyor, PhotocellSpec, SpawnerSpec, PusherSpec, DiverterSpec, StopperSpec, AirJetSpec,

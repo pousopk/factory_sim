@@ -39,6 +39,13 @@ struct Pick {
     bool operator==(const Pick&) const = default;
 };
 
+// Whether a kind of thing is a sensor. One placed otherwise than as usual on
+// its belt doesn't sense yet (milestone 22): its maths is still in belt terms.
+inline bool isSensor(Pick::Kind kind) {
+    return kind == Pick::Kind::Photocell || kind == Pick::Kind::Camera || kind == Pick::Kind::Proximity ||
+           kind == Pick::Kind::Laser || kind == Pick::Kind::LightCurtain;
+}
+
 struct DrawBox {
     glm::vec3 center;
     glm::quat rotation{1.0F, 0.0F, 0.0F, 0.0F};

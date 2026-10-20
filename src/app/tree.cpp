@@ -75,6 +75,22 @@ struct Row {
 } // namespace
 
 std::string App::describe(Pick pick) const {
+    auto text = describeThing(pick);
+    if (const auto* place = placementOf(history_.current(), pick); place != nullptr && !text.empty()) {
+        if (place->parent == Parent::World) {
+            text += fmt::format("\nstanding on its own at ({:.2f}, {:.2f}, {:.2f})", place->offset.x, place->offset.y,
+                                place->offset.z);
+        } else if (!place->asUsual()) {
+            text += "\nmoved from its usual place on its belt";
+        }
+        if (!place->asUsual() && isSensor(pick.kind)) {
+            text += "\nnot sensing yet: off its belt's usual place (milestone 22)";
+        }
+    }
+    return text;
+}
+
+std::string App::describeThing(Pick pick) const {
     const auto& s = history_.current();
     const auto& w = *world_;
     // An address and its value now, as the PLC sees it.
@@ -234,14 +250,29 @@ void App::drawLineTree() {
     const auto& w = *world_;
     ImGui::SetNextItemWidth(-1.0F);
     ImGui::InputTextWithHint("##filter", "filter by name", &lineFilter_);
-    for (std::size_t i = 0; i < s.conveyors.size(); ++i) {
-        const auto& c = s.conveyors[i];
+    // Each conveyor, then (as if one more) the devices standing on their own.
+    PlacedConveyor ownGroup;
+    ownGroup.spec.name = "On their own";
+    for (std::size_t i = 0; i <= s.conveyors.size(); ++i) {
+        const bool own = i == s.conveyors.size();
+        const auto& c = own ? ownGroup : s.conveyors[i];
         std::vector<Row> rows;
         const auto add = [&](Pick::Kind kind, auto& specs, auto describeRow) {
             for (std::size_t k = 0; k < specs.size(); ++k) {
-                if (specs[k].conveyor == i) {
+                const auto& place = specs[k].place;
+                if (own ? place.parent == Parent::World : place.parent == Parent::Conveyor && specs[k].conveyor == i) {
                     Row row{Pick{kind, k}, {}, {}, std::nullopt, {}};
                     describeRow(specs[k], k, row);
+                    if (own) {
+                        // Its kind (up to its place along a belt, which it has
+                        // none of), and where it stands.
+                        const auto digit = row.what.find_first_of("0123456789");
+                        row.what =
+                            row.what.substr(0, digit == std::string::npos ? row.what.size() : digit) +
+                            fmt::format("at {:.2f}, {:.2f}, {:.2f}", place.offset.x, place.offset.y, place.offset.z);
+                    } else if (!place.asUsual()) {
+                        row.what += " (moved)";
+                    }
                     rows.push_back(std::move(row));
                 }
             }
@@ -319,6 +350,9 @@ void App::drawLineTree() {
                 r.detail = fmt::format("{} items", w.bins()[k].count);
             }
         });
+        if (own && rows.empty()) {
+            break; // nothing stands on its own
+        }
         // Filtered: the conveyor shows if it, or anything on it, matches.
         const bool conveyorMatches = contains(c.spec.name, lineFilter_);
         if (!lineFilter_.empty()) {
@@ -351,12 +385,14 @@ void App::drawLineTree() {
         }
         const bool running = i < w.conveyors().size() && w.conveyors()[i].speed > 0.001F;
         dot(running);
-        const bool open = ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<std::intptr_t>(i)), flags,
-                                            "%s  %.2f m%s", c.spec.name.c_str(), c.spec.length, extra.c_str());
-        if (ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
+        const bool open =
+            own ? ImGui::TreeNodeEx("##own", flags & ~ImGuiTreeNodeFlags_Selected, "%s", c.spec.name.c_str())
+                : ImGui::TreeNodeEx(reinterpret_cast<void*>(static_cast<std::intptr_t>(i)), flags, "%s  %.2f m%s",
+                                    c.spec.name.c_str(), c.spec.length, extra.c_str());
+        if (!own && ImGui::IsItemClicked() && !ImGui::IsItemToggledOpen()) {
             selected_ = conveyorPick;
         }
-        if (ImGui::IsItemHovered()) {
+        if (!own && ImGui::IsItemHovered()) {
             ImGui::SetTooltip("%s", describe(conveyorPick).c_str());
         }
         if (!open) {

@@ -1,6 +1,7 @@
 #pragma once
 #include "analysis/tin_study.hpp"
 #include "edit/file_browser.hpp"
+#include "edit/gizmo.hpp"
 #include "edit/placing.hpp"
 #include "edit/scene_history.hpp"
 #include "edit/settings.hpp"
@@ -112,6 +113,7 @@ private:
     void drawDiverterInspector(std::size_t index);
     void drawStopperInspector(std::size_t index);
     void drawAirJetInspector(std::size_t index);
+    void drawPlacement(Pick pick); // placement_view.cpp: under any device's own settings
     void drawBinInspector(std::size_t index);
     // The cameras (cameras.cpp): a camera's settings, the camera triggering
     // in the main panel, and the Cameras window (which camera took which
@@ -129,7 +131,9 @@ private:
     void drawItemInspector(ItemId id);
     // The Line panel as a tree, and what's under the mouse (tree.cpp).
     void drawLineTree();
-    std::string describe(Pick pick) const; // a tooltip's text: name, kind, place, wiring, live values
+    std::string describe(Pick pick) const;
+    std::string describeThing(Pick pick) const; // what describe says, before where it's placed // a tooltip's text:
+                                                // name, kind, place, wiring, live values
     void drawCameraTriggering();
     void drawCameras();
     void drawTinTable();
@@ -241,6 +245,26 @@ private:
         glm::vec3 startedAt{}; // and where the conveyor started then
     };
     std::optional<Drag> drag_;
+    // The gizmo (gizmo_view.cpp): its handles on the selection, moving or
+    // turning it, along its own axes or the world's.
+    std::optional<Gizmo> currentGizmo() const;
+    GizmoView gizmoView() const;
+    bool gizmoMouse(const OrbitCamera::Ray& ray, bool pressed, bool held); // true: the mouse is the gizmo's
+    void drawGizmo();
+    bool dragging() const { return drag_.has_value() || gizmoDrag_.has_value(); }
+    GizmoMode gizmoMode_ = GizmoMode::Move;
+    bool gizmoWorldAxes_ = false;
+    std::optional<GizmoHandle> gizmoHover_;
+    struct GizmoDrag {
+        GizmoHandle handle;
+        Pick what;
+        Gizmo gizmo;              // as it was when the drag began
+        Scene original;           // the scene then
+        float startAlong = 0.0F;  // moving: where along the arrow the mouse was
+        glm::vec3 startOnPlane{}; // turning: where on the ring's plane
+        std::string amount;       // what it has done so far, to show
+    };
+    std::optional<GizmoDrag> gizmoDrag_;
     std::unique_ptr<World> preview_;    // the layout being dragged, to draw
     Scene previewed_;                   // the scene it was built from
     std::optional<Pick::Kind> placing_; // a new device waiting for a click on a belt

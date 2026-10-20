@@ -295,29 +295,28 @@ JPH::BodyID World::addKinematic(const Pose& pose, float friction) {
 
 std::size_t World::addPusher(const PusherSpec& spec) {
     Pusher pusher{spec, Stroke(spec.stroke), {}};
-    pusher.body = addKinematic(pusherPaddle(spec, conveyors_.at(spec.conveyor).spec, 0.0), 0.4F);
+    pusher.body = addKinematic(pusherPaddle(spec, beltOf(spec), 0.0), 0.4F);
     pushers_.push_back(pusher);
     return pushers_.size() - 1;
 }
 
 std::size_t World::addDiverter(const DiverterSpec& spec) {
     Diverter diverter{spec, Stroke(spec.stroke), {}};
-    diverter.body =
-        addKinematic(diverterArm(spec, conveyors_.at(spec.conveyor).spec, 0.0), 0.05F); // boxes slide along it
+    diverter.body = addKinematic(diverterArm(spec, beltOf(spec), 0.0), 0.05F); // boxes slide along it
     diverters_.push_back(diverter);
     return diverters_.size() - 1;
 }
 
 std::size_t World::addStopper(const StopperSpec& spec) {
     Stopper stopper{spec, Stroke(spec.stroke), {}};
-    stopper.body = addKinematic(stopperBlade(spec, conveyors_.at(spec.conveyor).spec, 0.0), 0.1F);
+    stopper.body = addKinematic(stopperBlade(spec, beltOf(spec), 0.0), 0.1F);
     stoppers_.push_back(stopper);
     return stoppers_.size() - 1;
 }
 
 std::size_t World::addBin(const BinSpec& spec) {
     Bin bin{spec, {}, 0, 0, {}};
-    for (const auto& wall : binWalls(spec, conveyors_.at(spec.conveyor).spec)) {
+    for (const auto& wall : binWalls(spec, beltOf(spec))) {
         bin.walls.push_back(addStatic(wall, 0.6F));
     }
     bins_.push_back(bin);
@@ -799,7 +798,7 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
 
     for (auto& proximity : proximities_) {
         const auto& spec = proximity.spec;
-        if (spec.conveyor >= conveyors_.size()) {
+        if (spec.conveyor >= conveyors_.size() || !spec.place.asUsual()) {
             continue;
         }
         const auto& conveyor = conveyors_[spec.conveyor];
@@ -881,7 +880,7 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
 
     for (auto& laser : lasers_) {
         const auto& spec = laser.spec;
-        if (spec.conveyor >= conveyors_.size()) {
+        if (spec.conveyor >= conveyors_.size() || !spec.place.asUsual()) {
             continue;
         }
         const auto& conveyor = conveyors_[spec.conveyor];
@@ -933,7 +932,7 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
 
     for (auto& curtain : curtains_) {
         const auto& spec = curtain.spec;
-        if (spec.conveyor >= conveyors_.size() || stepEnd + 1e-9 < curtain.nextScan) {
+        if (spec.conveyor >= conveyors_.size() || !spec.place.asUsual() || stepEnd + 1e-9 < curtain.nextScan) {
             continue; // between scans: the outputs hold
         }
         curtain.nextScan = stepEnd + spec.scanTime;
@@ -1119,10 +1118,11 @@ void World::updateAirJets(double stepStart, double stepEnd) {
     for (auto& jet : airJets_) {
         const double flowing = jet.update(stepStart, stepEnd);
         jet.lastPush = 0.0F;
-        if (flowing <= 0.0 || jet.spec.conveyor >= conveyors_.size() || items_.empty()) {
+        if (flowing <= 0.0 || items_.empty() ||
+            (jet.spec.place.parent == Parent::Conveyor && jet.spec.conveyor >= conveyors_.size())) {
             continue;
         }
-        const auto& conveyor = conveyors_[jet.spec.conveyor].spec;
+        const auto& conveyor = beltOf(jet.spec);
         constexpr float kReach = 0.8F; // m: past that, the jet has spread and slowed to nothing useful
         for (const auto& nozzle : nozzlesOf(jet.spec, conveyor)) {
             const auto streams = streamsAround(nozzle.direction, jet.spec.spread);
@@ -1159,8 +1159,8 @@ std::size_t World::addCamera(const CameraSpec& spec) {
 // (the moment found within the step, as the belt moves evenly in it).
 void World::takeLines(Camera& camera, double stepEnd) {
     const auto& spec = camera.spec;
-    if (spec.conveyor >= conveyors_.size()) {
-        return;
+    if (spec.conveyor >= conveyors_.size() || !spec.place.asUsual()) {
+        return; // (one placed otherwise doesn't see yet)
     }
     const double stepStart = stepEnd - kStep;
     if (spec.lineTrigger == LineTrigger::FreeRun) {
@@ -1345,7 +1345,7 @@ void World::updateCameras(double stepEnd) {
             camera.busy.set(camera.timing.busyUntil(), false);
         }
         const auto& spec = camera.spec;
-        if (spec.conveyor >= conveyors_.size()) {
+        if (spec.conveyor >= conveyors_.size() || !spec.place.asUsual()) {
             camera.pending.clear();
             continue;
         }
@@ -1404,17 +1404,15 @@ void World::updateActuators(double stepStart, double stepEnd) {
     };
     for (auto& pusher : pushers_) {
         pusher.stroke.update(stepStart, stepEnd);
-        move(pusher.body, pusherPaddle(pusher.spec, conveyors_[pusher.spec.conveyor].spec, pusher.stroke.position()));
+        move(pusher.body, pusherPaddle(pusher.spec, beltOf(pusher.spec), pusher.stroke.position()));
     }
     for (auto& diverter : diverters_) {
         diverter.stroke.update(stepStart, stepEnd);
-        move(diverter.body,
-             diverterArm(diverter.spec, conveyors_[diverter.spec.conveyor].spec, diverter.stroke.position()));
+        move(diverter.body, diverterArm(diverter.spec, beltOf(diverter.spec), diverter.stroke.position()));
     }
     for (auto& stopper : stoppers_) {
         stopper.stroke.update(stepStart, stepEnd);
-        move(stopper.body,
-             stopperBlade(stopper.spec, conveyors_[stopper.spec.conveyor].spec, stopper.stroke.position()));
+        move(stopper.body, stopperBlade(stopper.spec, beltOf(stopper.spec), stopper.stroke.position()));
     }
 }
 
@@ -1425,7 +1423,7 @@ void World::updateBins() {
     }
     const auto& bodies = physics_.bodies();
     for (auto& bin : bins_) {
-        const auto inside = binInside(bin.spec, conveyors_[bin.spec.conveyor].spec);
+        const auto inside = binInside(bin.spec, beltOf(bin.spec));
         const auto toLocal = glm::conjugate(inside.rotation);
         for (const auto& item : items_) {
             const auto center = toGlm(JPH::Vec3(bodies.GetPosition(item.body)));
@@ -1511,10 +1509,13 @@ void World::updateSpawners() {
     for (std::size_t i = 0; i < spawners_.size(); ++i) {
         const auto& spec = spawners_[i];
         auto& state = spawnerStates_[i];
-        if (!spec.enabled || time() + 1e-9 < state.nextSpawn || spec.conveyor >= conveyors_.size()) {
+        const bool onBelt = spec.place.parent == Parent::Conveyor;
+        if (!spec.enabled || time() + 1e-9 < state.nextSpawn || (onBelt && spec.conveyor >= conveyors_.size())) {
             continue;
         }
-        const auto& conveyor = conveyors_[spec.conveyor];
+        // Where it drops its items: on its belt, or wherever it's placed
+        // (worked out on a stand-in belt, then moved there).
+        const auto m = mounting(spec.place, onBelt ? &conveyors_[spec.conveyor].spec : nullptr, spec.offset);
         // Its items' size: from its settings, the jitter on their height
         // drawn below; an STL part's from its file.
         auto size = spec.size;
@@ -1529,11 +1530,11 @@ void World::updateSpawners() {
             geometry = *made;
             size = geometry->size();
         }
-        const auto position = conveyor.beltPoint(spec.offset) + glm::vec3(0.0F, size.y / 2.0F + 0.002F, 0.0F);
+        const auto position = m.point(beltPoint(m.belt, spec.offset) + glm::vec3(0.0F, size.y / 2.0F + 0.002F, 0.0F));
         // An infeed waits for a gap: if a box is still where the new one would
         // go (the belt has stopped, or boxes are queueing back to here), it
         // waits, and the rhythm starts again from when it can put it down.
-        const auto along = conveyor.direction();
+        const auto along = m.direction(directionOf(m.belt.heading));
         const auto& bodies = physics_.bodies();
         const bool occupied = std::any_of(items_.begin(), items_.end(), [&](const Item& item) {
             const auto offset = toGlm(JPH::Vec3(bodies.GetPosition(item.body))) - position;
@@ -1542,7 +1543,7 @@ void World::updateSpawners() {
             // their middles' heights are.
             return std::abs(glm::dot(offset, along)) < (size.x + item.size.x) / 2.0F + 0.01F &&
                    std::abs(offset.y) < std::max(size.y, (size.y + item.size.y) / 2.0F) &&
-                   std::abs(glm::dot(offset, leftOf(along))) < conveyor.spec.width / 2.0F;
+                   std::abs(glm::dot(offset, leftOf(along))) < m.belt.width / 2.0F;
         });
         if (occupied) {
             state.waiting = true;
@@ -1562,8 +1563,11 @@ void World::updateSpawners() {
             }
         }
         const auto at = position + glm::vec3(0.0F, (size.y - unjittered.y) / 2.0F, 0.0F); // still resting on the belt
-        spawnItem(at, size, nok ? kNokColor : itemColor(spec.shape), conveyor.spec.heading, nok, spec.shape,
-                  spec.atBeltSpeed ? conveyor.direction() * conveyor.speedAt(spec.offset) : glm::vec3(0.0F), geometry);
+        // Turned the way its items travel (on a belt: the belt's heading).
+        const float heading = m.identity ? m.belt.heading : std::atan2(-along.z, along.x);
+        const bool moving = spec.atBeltSpeed && onBelt; // (one standing on its own drops them still)
+        spawnItem(at, size, nok ? kNokColor : itemColor(spec.shape), heading, nok, spec.shape,
+                  moving ? along * conveyors_[spec.conveyor].speedAt(spec.offset) : glm::vec3(0.0F), geometry);
         ++spawned_;
         spawnedNok_ += nok ? 1 : 0;
 
@@ -1718,8 +1722,8 @@ void World::updatePhotocells(double stepStart, double stepEnd) {
     const auto& bodies = physics_.bodies();
     for (auto& photocell : photocells_) {
         const auto& spec = photocell.spec;
-        if (spec.conveyor >= conveyors_.size()) {
-            continue;
+        if (spec.conveyor >= conveyors_.size() || !spec.place.asUsual()) {
+            continue; // (one placed otherwise doesn't see yet)
         }
         const auto& conveyor = conveyors_[spec.conveyor];
         std::vector<std::size_t> owners; // which item each interval belongs to

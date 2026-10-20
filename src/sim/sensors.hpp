@@ -1,5 +1,6 @@
 #pragma once
 #include "sim/item_shape.hpp"
+#include "sim/placement.hpp"
 #include "sim/signal.hpp"
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +39,7 @@ struct PhotocellSpec {
     std::string name = "B1";
     std::size_t conveyor = 0;
     float along = 1.5F;          // where the beam crosses, metres from the belt's start
+    Placement place;             // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     float height = 0.05F;        // the beam's height above the belt surface
     float beamDiameter = 0.008F; // m
     float onFraction = 0.6F;     // covered more than this: on

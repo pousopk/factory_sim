@@ -1,6 +1,8 @@
 #pragma once
 #include "sim/actuators.hpp"
 #include "sim/conveyor_spec.hpp"
+#include "sim/mounting.hpp"
+#include "sim/placement.hpp"
 #include "sim/signal.hpp"
 #include <deque>
 #include <glm/glm.hpp>
@@ -35,6 +37,7 @@ struct AirJetSpec {
     std::string name = "Y1";
     std::size_t conveyor = 0;
     float along = 2.0F;       // metres from the belt's start, to the middle of the row
+    Placement place;          // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     Side side = Side::Left;   // where it's mounted: it blows towards the other side
     float height = 0.03F;     // the nozzles' height above the belt
     int nozzles = 3;          // in a row along the belt
@@ -60,6 +63,8 @@ struct Nozzle {
     glm::vec3 direction;
 };
 std::vector<Nozzle> nozzlesOf(const AirJetSpec& spec, const ConveyorSpec& conveyor);
+// The same where it would usually be on `conveyor`, ignoring its placement.
+std::vector<Nozzle> nozzlesOnBelt(const AirJetSpec& spec, const ConveyorSpec& conveyor);
 
 // The streams' directions in one nozzle's cone around `axis`: one along
 // it and rings of 6, 12 and 18 around it, so they spread evenly over the

@@ -105,6 +105,7 @@ add_library(factory_sim_core STATIC
   src/sim/scene.cpp
   src/sim/actuators.cpp
   src/sim/air_jet.cpp
+  src/sim/mounting.cpp
   src/sim/io.cpp
   src/sim/control.cpp
 )
@@ -143,6 +144,7 @@ add_library(factory_sim_view STATIC
   src/edit/settings.cpp
   src/edit/file_browser.cpp
   src/edit/placing.cpp
+  src/edit/gizmo.cpp
   src/analysis/analysis.cpp
   src/analysis/tin_study.cpp
 )
@@ -207,6 +209,8 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/drives.cpp
     src/app/sensors.cpp
     src/app/air_jets.cpp
+    src/app/gizmo_view.cpp
+    src/app/placement_view.cpp
     src/app/equipment.cpp
     src/app/editing.cpp
     src/app/camera_view.cpp

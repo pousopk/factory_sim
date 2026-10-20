@@ -81,7 +81,7 @@ glm::quat turnedBy(float heading) {
 
 } // namespace
 
-Pose pusherPaddle(const PusherSpec& spec, const ConveyorSpec& conveyor, double position) {
+Pose pusherPaddleOnBelt(const PusherSpec& spec, const ConveyorSpec& conveyor, double position) {
     // Retracted, the paddle's face is just outside the belt's edge; extended,
     // it has crossed the whole belt and a bit more, so a box goes right off.
     const auto out = towards(spec.side, conveyor);
@@ -93,7 +93,7 @@ Pose pusherPaddle(const PusherSpec& spec, const ConveyorSpec& conveyor, double p
                 {spec.paddleLength, kPaddleHeight, kPaddleThickness}};
 }
 
-Pose diverterArm(const DiverterSpec& spec, const ConveyorSpec& conveyor, double position) {
+Pose diverterArmOnBelt(const DiverterSpec& spec, const ConveyorSpec& conveyor, double position) {
     // The arm lies along the belt's edge, pivoted at its upstream end; it
     // swings out over the belt, its tip moving downstream and across, long
     // enough to reach the far edge at its full angle.
@@ -109,7 +109,7 @@ Pose diverterArm(const DiverterSpec& spec, const ConveyorSpec& conveyor, double 
     return Pose{center, turnedBy(heading), {length, kArmHeight, kArmThickness}};
 }
 
-Pose stopperBlade(const StopperSpec& spec, const ConveyorSpec& conveyor, double position) {
+Pose stopperBladeOnBelt(const StopperSpec& spec, const ConveyorSpec& conveyor, double position) {
     // Retracted, the blade's top is just below the belt's surface; extended,
     // it stands `height` above it. It's taller than that, so part of it
     // always stays below, as a real one does in its slot.
@@ -120,8 +120,8 @@ Pose stopperBlade(const StopperSpec& spec, const ConveyorSpec& conveyor, double 
                 {kPaddleThickness, blade, conveyor.width}};
 }
 
-std::vector<Pose> binWalls(const BinSpec& spec, const ConveyorSpec& conveyor) {
-    const auto inside = binInside(spec, conveyor);
+std::vector<Pose> binWallsOnBelt(const BinSpec& spec, const ConveyorSpec& conveyor) {
+    const auto inside = binInsideOnBelt(spec, conveyor);
     const auto rotation = turnedBy(conveyor.heading);
     const auto along = directionOf(conveyor.heading);
     const auto out = towards(spec.side, conveyor);
@@ -138,13 +138,51 @@ std::vector<Pose> binWalls(const BinSpec& spec, const ConveyorSpec& conveyor) {
     };
 }
 
-Pose binInside(const BinSpec& spec, const ConveyorSpec& conveyor) {
+Pose binInsideOnBelt(const BinSpec& spec, const ConveyorSpec& conveyor) {
     // Beside the belt, a little beyond its frame, on the floor.
     const auto out = towards(spec.side, conveyor);
     const float near = conveyor.width / 2.0F + kFrameWidth + 0.03F;
     auto center = conveyor.start + directionOf(conveyor.heading) * spec.along + out * (near + spec.size.z / 2.0F);
     center.y = spec.size.y / 2.0F;
     return Pose{center, turnedBy(conveyor.heading), spec.size - glm::vec3(2.0F * kWall, kWall, 2.0F * kWall)};
+}
+
+// ---- Where they are: worked out on their belt (or a stand-in), then moved
+// by their placement.
+
+Pose moved(const Mounting& m, Pose pose) {
+    pose.center = m.point(pose.center);
+    pose.rotation = m.rotation(pose.rotation);
+    return pose;
+}
+
+Pose pusherPaddle(const PusherSpec& spec, const ConveyorSpec& conveyor, double position) {
+    const auto m = mounting(spec.place, &conveyor, spec.along);
+    return moved(m, pusherPaddleOnBelt(spec, m.belt, position));
+}
+
+Pose diverterArm(const DiverterSpec& spec, const ConveyorSpec& conveyor, double position) {
+    const auto m = mounting(spec.place, &conveyor, spec.along);
+    return moved(m, diverterArmOnBelt(spec, m.belt, position));
+}
+
+Pose stopperBlade(const StopperSpec& spec, const ConveyorSpec& conveyor, double position) {
+    const auto m = mounting(spec.place, &conveyor, spec.along);
+    return moved(m, stopperBladeOnBelt(spec, m.belt, position));
+}
+
+std::vector<Pose> binWalls(const BinSpec& spec, const ConveyorSpec& conveyor) {
+    const auto m = mounting(spec.place, &conveyor, spec.along);
+    auto walls = binWallsOnBelt(spec, m.belt);
+    for (auto& wall : walls) {
+        wall = moved(m, wall);
+    }
+    return walls;
+}
+
+Pose binInside(const BinSpec& spec, const ConveyorSpec& conveyor) {
+    const auto m = mounting(spec.place, &conveyor, spec.along);
+    return moved(m, binInsideOnBelt(spec, m.belt));
 }
 
 } // namespace fsim

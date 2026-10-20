@@ -150,8 +150,8 @@ std::vector<DrawBox> photocellBoxes(const Photocell& photocell, const Conveyor& 
 }
 
 std::vector<DrawBox> pusherBoxes(const Pusher& pusher, const ConveyorSpec& conveyor) {
-    const auto paddle = pusherPaddle(pusher.spec, conveyor, pusher.stroke.position());
-    const auto rest = pusherPaddle(pusher.spec, conveyor, 0.0);
+    const auto paddle = pusherPaddleOnBelt(pusher.spec, conveyor, pusher.stroke.position());
+    const auto rest = pusherPaddleOnBelt(pusher.spec, conveyor, 0.0);
     const auto out = glm::normalize(rest.center - beltPoint(conveyor, pusher.spec.along) -
                                     glm::vec3(0.0F, rest.center.y - conveyor.beltHeight, 0.0F));
     // The cylinder stands outside the frame, behind the paddle's rest place.
@@ -176,8 +176,8 @@ std::vector<DrawBox> pusherBoxes(const Pusher& pusher, const ConveyorSpec& conve
 }
 
 std::vector<DrawBox> diverterBoxes(const Diverter& diverter, const ConveyorSpec& conveyor) {
-    const auto arm = diverterArm(diverter.spec, conveyor, diverter.stroke.position());
-    const auto rest = diverterArm(diverter.spec, conveyor, 0.0);
+    const auto arm = diverterArmOnBelt(diverter.spec, conveyor, diverter.stroke.position());
+    const auto rest = diverterArmOnBelt(diverter.spec, conveyor, 0.0);
     // The pivot: a post at the arm's upstream end, standing on the frame.
     const auto pivot = rest.center - directionOf(conveyor.heading) * (rest.size.x / 2.0F);
     std::vector<DrawBox> boxes;
@@ -192,7 +192,7 @@ std::vector<DrawBox> diverterBoxes(const Diverter& diverter, const ConveyorSpec&
 
 std::vector<DrawBox> airJetBoxes(const AirJet& jet, const ConveyorSpec& conveyor) {
     std::vector<DrawBox> boxes;
-    const auto nozzles = nozzlesOf(jet.spec, conveyor);
+    const auto nozzles = nozzlesOnBelt(jet.spec, conveyor);
     if (nozzles.empty()) {
         return boxes;
     }
@@ -234,12 +234,12 @@ std::vector<DrawBox> airJetBoxes(const AirJet& jet, const ConveyorSpec& conveyor
 }
 
 std::vector<DrawBox> stopperBoxes(const Stopper& stopper, const ConveyorSpec& conveyor) {
-    return {fromPose(stopperBlade(stopper.spec, conveyor, stopper.stroke.position()), kBladeColor)};
+    return {fromPose(stopperBladeOnBelt(stopper.spec, conveyor, stopper.stroke.position()), kBladeColor)};
 }
 
 std::vector<DrawBox> binBoxes(const Bin& bin, const ConveyorSpec& conveyor) {
     std::vector<DrawBox> boxes;
-    for (const auto& wall : binWalls(bin.spec, conveyor)) {
+    for (const auto& wall : binWallsOnBelt(bin.spec, conveyor)) {
         boxes.push_back(fromPose(wall, kBinColor));
     }
     return boxes;
@@ -439,81 +439,84 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
             addParts(boxes, photocellBoxes(eye, conveyors[i]), Pick{Pick::Kind::Conveyor, i}, selected, hovered);
         }
     }
-    for (std::size_t i = 0; i < world.photocells().size(); ++i) {
-        const auto& photocell = world.photocells()[i];
-        if (photocell.spec.conveyor < conveyors.size()) {
-            addParts(boxes, photocellBoxes(photocell, conveyors[photocell.spec.conveyor]),
-                     Pick{Pick::Kind::Photocell, i}, selected, hovered);
+    // Each device drawn where it would usually be on its belt (or on a
+    // stand-in belt, for one standing on its own), then moved all at once to
+    // where its placement puts it.
+    const auto device = [&](const auto& spec, float along, Pick pick, const auto& draw) {
+        const bool onBelt = spec.place.parent == Parent::Conveyor;
+        if (onBelt && spec.conveyor >= conveyors.size()) {
+            return; // (its conveyor is gone)
         }
+        const auto m = mounting(spec.place, onBelt ? &conveyors[spec.conveyor].spec : nullptr, along);
+        std::vector<DrawBox> parts;
+        if (m.identity) {
+            parts = draw(conveyors[spec.conveyor]);
+        } else {
+            Conveyor belt; // only its shape: the drawing needs no more of it
+            belt.spec = m.belt;
+            if (onBelt) {
+                belt.speed = conveyors[spec.conveyor].speed;
+                belt.travelled = conveyors[spec.conveyor].travelled;
+            }
+            parts = draw(belt);
+            for (auto& part : parts) {
+                part.center = m.point(part.center);
+                part.rotation = m.rotation(part.rotation);
+            }
+        }
+        addParts(boxes, std::move(parts), pick, selected, hovered);
+    };
+    for (std::size_t i = 0; i < world.photocells().size(); ++i) {
+        const auto& p = world.photocells()[i];
+        device(p.spec, p.spec.along, Pick{Pick::Kind::Photocell, i},
+               [&](const Conveyor& c) { return photocellBoxes(p, c); });
     }
-    const auto onConveyor = [&](std::size_t conveyor) { return conveyor < conveyors.size(); };
     for (std::size_t i = 0; i < world.pushers().size(); ++i) {
         const auto& a = world.pushers()[i];
-        if (onConveyor(a.spec.conveyor)) {
-            addParts(boxes, pusherBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Pusher, i}, selected,
-                     hovered);
-        }
+        device(a.spec, a.spec.along, Pick{Pick::Kind::Pusher, i},
+               [&](const Conveyor& c) { return pusherBoxes(a, c.spec); });
     }
     for (std::size_t i = 0; i < world.diverters().size(); ++i) {
         const auto& a = world.diverters()[i];
-        if (onConveyor(a.spec.conveyor)) {
-            addParts(boxes, diverterBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Diverter, i}, selected,
-                     hovered);
-        }
+        device(a.spec, a.spec.along, Pick{Pick::Kind::Diverter, i},
+               [&](const Conveyor& c) { return diverterBoxes(a, c.spec); });
     }
     for (std::size_t i = 0; i < world.stoppers().size(); ++i) {
         const auto& a = world.stoppers()[i];
-        if (onConveyor(a.spec.conveyor)) {
-            addParts(boxes, stopperBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::Stopper, i}, selected,
-                     hovered);
-        }
+        device(a.spec, a.spec.along, Pick{Pick::Kind::Stopper, i},
+               [&](const Conveyor& c) { return stopperBoxes(a, c.spec); });
     }
     for (std::size_t i = 0; i < world.airJets().size(); ++i) {
         const auto& a = world.airJets()[i];
-        if (onConveyor(a.spec.conveyor)) {
-            addParts(boxes, airJetBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::AirJet, i}, selected,
-                     hovered);
-        }
+        device(a.spec, a.spec.along, Pick{Pick::Kind::AirJet, i},
+               [&](const Conveyor& c) { return airJetBoxes(a, c.spec); });
     }
     for (std::size_t i = 0; i < world.bins().size(); ++i) {
         const auto& b = world.bins()[i];
-        if (onConveyor(b.spec.conveyor)) {
-            addParts(boxes, binBoxes(b, conveyors[b.spec.conveyor].spec), Pick{Pick::Kind::Bin, i}, selected, hovered);
-        }
+        device(b.spec, b.spec.along, Pick{Pick::Kind::Bin, i}, [&](const Conveyor& c) { return binBoxes(b, c.spec); });
     }
     for (std::size_t i = 0; i < world.spawners().size(); ++i) {
-        const auto& spawner = world.spawners()[i];
-        if (spawner.conveyor < conveyors.size()) {
-            addParts(boxes, spawnerBoxes(spawner, conveyors[spawner.conveyor]), Pick{Pick::Kind::Spawner, i}, selected,
-                     hovered);
-        }
+        const auto& s = world.spawners()[i];
+        device(s, s.offset, Pick{Pick::Kind::Spawner, i}, [&](const Conveyor& c) { return spawnerBoxes(s, c); });
     }
     for (std::size_t i = 0; i < world.cameras().size(); ++i) {
-        const auto& camera = world.cameras()[i];
-        if (onConveyor(camera.spec.conveyor)) {
-            addParts(boxes, cameraBoxes(camera, conveyors[camera.spec.conveyor], world.time()),
-                     Pick{Pick::Kind::Camera, i}, selected, hovered);
-        }
+        const auto& cam = world.cameras()[i];
+        device(cam.spec, cam.spec.along, Pick{Pick::Kind::Camera, i},
+               [&](const Conveyor& c) { return cameraBoxes(cam, c, world.time()); });
     }
     for (std::size_t i = 0; i < world.proximities().size(); ++i) {
         const auto& p = world.proximities()[i];
-        if (onConveyor(p.spec.conveyor)) {
-            addParts(boxes, proximityBoxes(p, conveyors[p.spec.conveyor]), Pick{Pick::Kind::Proximity, i}, selected,
-                     hovered);
-        }
+        device(p.spec, p.spec.along, Pick{Pick::Kind::Proximity, i},
+               [&](const Conveyor& c) { return proximityBoxes(p, c); });
     }
     for (std::size_t i = 0; i < world.lasers().size(); ++i) {
         const auto& l = world.lasers()[i];
-        if (onConveyor(l.spec.conveyor)) {
-            addParts(boxes, laserBoxes(l, conveyors[l.spec.conveyor]), Pick{Pick::Kind::Laser, i}, selected, hovered);
-        }
+        device(l.spec, l.spec.along, Pick{Pick::Kind::Laser, i}, [&](const Conveyor& c) { return laserBoxes(l, c); });
     }
     for (std::size_t i = 0; i < world.curtains().size(); ++i) {
-        const auto& c = world.curtains()[i];
-        if (onConveyor(c.spec.conveyor)) {
-            addParts(boxes, curtainBoxes(c, conveyors[c.spec.conveyor]), Pick{Pick::Kind::LightCurtain, i}, selected,
-                     hovered);
-        }
+        const auto& lc = world.curtains()[i];
+        device(lc.spec, lc.spec.along, Pick{Pick::Kind::LightCurtain, i},
+               [&](const Conveyor& c) { return curtainBoxes(lc, c); });
     }
     for (const auto& item : world.items()) {
         auto box = itemBox(item);
@@ -560,16 +563,18 @@ DrawBox ghostBox(glm::vec3 center, glm::quat rotation, glm::vec3 size, Shape sha
 
 CameraView cameraView(const CameraSpec& spec, const Conveyor& conveyor, int maxSize) {
     const glm::vec3 up{0.0F, 1.0F, 0.0F};
-    const auto along = conveyor.direction();
+    // Worked out on its belt (or a stand-in), then moved where it's placed.
+    const auto m = mounting(spec.place, &conveyor.spec, spec.along);
+    const auto along = directionOf(m.belt.heading);
     const auto left = leftOf(along);
-    const auto target = conveyor.beltPoint(spec.along);
+    const auto target = beltPoint(m.belt, spec.along);
     const auto toCamera = up * std::cos(spec.tilt) + left * std::sin(spec.tilt);
     CameraView view;
-    view.eye = target + toCamera * spec.workingDistance;
+    view.eye = m.point(target + toCamera * spec.workingDistance);
     // The picture's x runs along the travel, so its "up" is the belt's left
     // (turned with the camera).
-    const auto pictureUp = glm::normalize(glm::cross(toCamera, along));
-    view.view = glm::lookAt(view.eye, target, pictureUp);
+    const auto pictureUp = m.direction(glm::normalize(glm::cross(toCamera, along)));
+    view.view = glm::lookAt(view.eye, m.point(target), pictureUp);
     // The lens: what the field of view (along) and the pixels make across,
     // seen from the working distance.
     const float across = spec.fieldOfView * static_cast<float>(spec.pixelsAcross) / static_cast<float>(spec.pixels);
@@ -598,56 +603,64 @@ std::vector<Label> sceneLabels(const World& world) {
         labels.push_back(Label{above(i, conveyors[i].spec.length / 2.0F, 0.0F, -conveyors[i].spec.width / 2.0F - 0.1F),
                                conveyors[i].spec.name, Pick{Pick::Kind::Conveyor, i}});
     }
+    // A device's name: a point worked out on its belt (or stand-in), `height`
+    // above the belt at `along`, `side` to the left, then moved by its
+    // placement, as its parts are.
+    const auto label = [&](const auto& spec, float along, float height, float side, Pick pick) {
+        const bool onBelt = spec.place.parent == Parent::Conveyor;
+        if (onBelt && !on(spec.conveyor)) {
+            return;
+        }
+        const auto m = mounting(spec.place, onBelt ? &conveyors[spec.conveyor].spec : nullptr, along);
+        const auto point = beltPoint(m.belt, along) + up * height + leftOf(directionOf(m.belt.heading)) * side;
+        labels.push_back(Label{m.point(point), spec.name, pick});
+    };
+    const auto widthOf = [&](const auto& spec) {
+        return spec.place.parent == Parent::World || !on(spec.conveyor) ? spec.place.span
+                                                                        : conveyors[spec.conveyor].spec.width;
+    };
     for (std::size_t i = 0; i < world.photocells().size(); ++i) {
         const auto& p = world.photocells()[i].spec;
-        if (on(p.conveyor)) {
-            const float side = conveyors[p.conveyor].spec.width / 2.0F + kFrameWidth + kHousingSize;
-            labels.push_back(
-                Label{above(p.conveyor, p.along, p.height + 0.08F, side), p.name, Pick{Pick::Kind::Photocell, i}});
-        }
+        label(p, p.along, p.height + 0.08F, widthOf(p) / 2.0F + kFrameWidth + kHousingSize,
+              Pick{Pick::Kind::Photocell, i});
     }
     for (std::size_t i = 0; i < world.proximities().size(); ++i) {
         const auto& p = world.proximities()[i].spec;
-        if (on(p.conveyor)) {
-            labels.push_back(
-                Label{above(p.conveyor, p.along, p.height + 0.06F), p.name, Pick{Pick::Kind::Proximity, i}});
-        }
+        label(p, p.along, p.height + 0.06F, 0.0F, Pick{Pick::Kind::Proximity, i});
     }
     for (std::size_t i = 0; i < world.lasers().size(); ++i) {
         const auto& l = world.lasers()[i].spec;
-        if (on(l.conveyor)) {
-            labels.push_back(
-                Label{above(l.conveyor, l.along, l.mountHeight + 0.15F, l.across), l.name, Pick{Pick::Kind::Laser, i}});
-        }
+        label(l, l.along, l.mountHeight + 0.15F, l.across, Pick{Pick::Kind::Laser, i});
     }
     for (std::size_t i = 0; i < world.curtains().size(); ++i) {
         const auto& c = world.curtains()[i].spec;
-        if (on(c.conveyor)) {
-            const float top = c.lowest + static_cast<float>(std::max(c.beams - 1, 0)) * c.pitch + 0.08F;
-            labels.push_back(Label{above(c.conveyor, c.along, top), c.name, Pick{Pick::Kind::LightCurtain, i}});
-        }
+        const float top = c.lowest + static_cast<float>(std::max(c.beams - 1, 0)) * c.pitch + 0.08F;
+        label(c, c.along, top, 0.0F, Pick{Pick::Kind::LightCurtain, i});
     }
     const auto actuator = [&](const auto& list, Pick::Kind kind) {
         for (std::size_t i = 0; i < list.size(); ++i) {
-            const auto& spec = list[i].spec;
-            if (on(spec.conveyor)) {
-                labels.push_back(Label{above(spec.conveyor, spec.along, 0.25F), spec.name, Pick{kind, i}});
-            }
+            label(list[i].spec, list[i].spec.along, 0.25F, 0.0F, Pick{kind, i});
         }
     };
     actuator(world.pushers(), Pick::Kind::Pusher);
     actuator(world.diverters(), Pick::Kind::Diverter);
     actuator(world.stoppers(), Pick::Kind::Stopper);
     actuator(world.airJets(), Pick::Kind::AirJet);
-    actuator(world.bins(), Pick::Kind::Bin);
-    for (std::size_t i = 0; i < world.cameras().size(); ++i) {
-        const auto& c = world.cameras()[i].spec;
-        if (on(c.conveyor)) {
-            labels.push_back(
-                Label{above(c.conveyor, c.along, 0.0F) +
-                          (up * std::cos(c.tilt) + leftOf(conveyors[c.conveyor].direction()) * std::sin(c.tilt)) * 0.5F,
-                      c.name, Pick{Pick::Kind::Camera, i}});
+    // A bin's name above the bin, wherever it stands (not above its belt).
+    for (std::size_t i = 0; i < world.bins().size(); ++i) {
+        const auto& b = world.bins()[i].spec;
+        const bool onBelt = b.place.parent == Parent::Conveyor;
+        if (onBelt && !on(b.conveyor)) {
+            continue;
         }
+        static const ConveyorSpec none;
+        const auto inside = binInside(b, onBelt ? conveyors[b.conveyor].spec : none);
+        labels.push_back(Label{inside.center + up * (b.size.y / 2.0F + 0.08F), b.name, Pick{Pick::Kind::Bin, i}});
+    }
+    for (std::size_t i = 0; i < world.cameras().size(); ++i) {
+        // Half a metre from the belt, the way it looks from.
+        const auto& c = world.cameras()[i].spec;
+        label(c, c.along, 0.5F * std::cos(c.tilt), 0.5F * std::sin(c.tilt), Pick{Pick::Kind::Camera, i});
     }
     return labels;
 }

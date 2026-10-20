@@ -1,4 +1,5 @@
 #pragma once
+#include "sim/placement.hpp"
 #include "sim/sensors.hpp"
 #include "sim/signal.hpp"
 #include <cstddef>
@@ -34,6 +35,7 @@ struct ProximitySpec {
     std::string name = "BP1";
     std::size_t conveyor = 0;
     float along = 1.0F;
+    Placement place; // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     Mount mount = Mount::Left;
     bool inductive = true;       // false: capacitive
     float faceDiameter = 0.018F; // M18
@@ -67,6 +69,7 @@ struct LaserSpec {
     std::string name = "BL1";
     std::size_t conveyor = 0;
     float along = 1.0F;
+    Placement place;          // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     float across = 0.0F;      // the spot's distance from the belt's centre line (left positive), m
     float mountHeight = 0.5F; // the sensor above the belt surface, m
     float rangeMin = 0.1F;    // its measuring range, from the sensor
@@ -106,6 +109,7 @@ struct LightCurtainSpec {
     std::string name = "BC1";
     std::size_t conveyor = 0;
     float along = 1.0F;
+    Placement place; // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     int beams = 16;
     float pitch = 0.01F;     // m between beams
     float lowest = 0.01F;    // the lowest beam above the belt, m

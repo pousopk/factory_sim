@@ -110,7 +110,7 @@ void App::frame(double realSeconds, int width, int height) {
     drawNewConfirmation();
 
     // An edit is finished when no widget is being used: then it's one undo step, saved at once.
-    if (!ImGui::IsAnyItemActive() && !drag_ && history_.commit()) {
+    if (!ImGui::IsAnyItemActive() && !dragging() && history_.commit()) {
         if (auto saved = saveScene(scene(), savePath()); saved) {
             fileStatus_ = scenePath_.empty() ? "untitled (saved in the config folder)"
                                              : "saved " + scenePath_.filename().string();
@@ -119,7 +119,7 @@ void App::frame(double realSeconds, int width, int height) {
         }
     }
     keepSelectionValid();
-    if (!drag_) {
+    if (!dragging()) {
         followScene(); // (while dragging, a preview is drawn instead)
     }
 
@@ -158,6 +158,7 @@ void App::frame(double realSeconds, int width, int height) {
     if (showNames_) {
         drawNames();
     }
+    drawGizmo();
 }
 
 // Each device's name, at its place in the view: projected through the
@@ -167,7 +168,7 @@ void App::drawNames() {
     const auto viewProjection = camera_.projection(aspect) * camera_.view();
     auto* draw = ImGui::GetBackgroundDrawList();
     draw->PushClipRect(viewMin_, ImVec2(viewMin_.x + viewSize_.x, viewMin_.y + viewSize_.y));
-    for (const auto& label : sceneLabels(drag_ && preview_ ? *preview_ : *world_)) {
+    for (const auto& label : sceneLabels(dragging() && preview_ ? *preview_ : *world_)) {
         const glm::vec4 clip = viewProjection * glm::vec4(label.position, 1.0F);
         if (clip.w <= 0.01F) {
             continue; // behind the camera
@@ -224,12 +225,17 @@ void App::handleMouse(int width, int height) {
     const bool clicked =
         ImGui::IsMouseReleased(ImGuiMouseButton_Left) && io.MouseDragMaxDistanceSqr[ImGuiMouseButton_Left] < 9.0F;
     if (const auto ray = mouseRay(width, height)) {
-        editInView(*ray, ImGui::IsMouseClicked(ImGuiMouseButton_Left), ImGui::IsMouseDown(ImGuiMouseButton_Left),
-                   clicked);
+        // The gizmo first: on one of its handles, the mouse is the gizmo's.
+        const bool onGizmo =
+            gizmoMouse(*ray, ImGui::IsMouseClicked(ImGuiMouseButton_Left), ImGui::IsMouseDown(ImGuiMouseButton_Left));
+        if (!onGizmo) {
+            editInView(*ray, ImGui::IsMouseClicked(ImGuiMouseButton_Left), ImGui::IsMouseDown(ImGuiMouseButton_Left),
+                       clicked);
+        }
         // What's under the mouse: lighter, with a tooltip saying what it is.
         // A click (a press and release that didn't move far) selects it.
         hoverPick_.reset();
-        if (!placing_ && !drag_) {
+        if (!placing_ && !dragging() && !onGizmo) {
             hoverPick_ = pickAt(sceneBoxes(*world_), ray->origin, ray->direction);
             if (hoverPick_ && !ImGui::IsMouseDown(ImGuiMouseButton_Left) &&
                 !ImGui::IsMouseDown(ImGuiMouseButton_Right)) {
@@ -243,7 +249,7 @@ void App::handleMouse(int width, int height) {
         }
     }
     const auto windowHeight = static_cast<float>(height);
-    if (!drag_ && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0F)) {
+    if (!dragging() && !gizmoHover_ && ImGui::IsMouseDragging(ImGuiMouseButton_Left, 3.0F)) {
         camera_.rotate(io.MouseDelta.x, io.MouseDelta.y, windowHeight);
     }
     if (ImGui::IsMouseDragging(ImGuiMouseButton_Right, 0.0F) || ImGui::IsMouseDragging(ImGuiMouseButton_Middle, 0.0F)) {
@@ -294,6 +300,17 @@ void App::handleKeys() {
     }
     if (ImGui::IsKeyPressed(ImGuiKey_F1, false)) {
         showHelp_ = !showHelp_;
+    }
+    // The gizmo: W moves, E turns, T switches between the selection's own
+    // axes and the world's.
+    if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_W, false)) {
+        gizmoMode_ = GizmoMode::Move;
+    }
+    if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_E, false)) {
+        gizmoMode_ = GizmoMode::Turn;
+    }
+    if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_T, false)) {
+        gizmoWorldAxes_ = !gizmoWorldAxes_;
     }
     if (!io.KeyCtrl && ImGui::IsKeyPressed(ImGuiKey_R)) {
 
@@ -542,6 +559,9 @@ void App::drawInspector() {
             break;
         case Pick::Kind::None:
             break;
+        }
+        if (selected_) { // (the inspector may have deleted it)
+            drawPlacement(*selected_);
         }
     }
     ImGui::End();

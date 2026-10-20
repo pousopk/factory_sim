@@ -172,6 +172,8 @@ void App::drawHelp() {
                     {"Select", "click"},
                     {"Move the selection", "drag it: along its belt, or a conveyor across the floor"},
                     {"Fine steps", "hold Shift while dragging"},
+                    {"Move or turn the selection anywhere", "drag its arrows (W) or rings (E)"},
+                    {"The gizmo's axes", "T: the selection's own, or the world's"},
                     {"Turn a conveyor", "R, Shift+R"},
                     {"Copy, paste, duplicate", "Ctrl+C, Ctrl+V, Ctrl+D"},
                     {"Delete", "Del"},

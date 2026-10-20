@@ -26,3 +26,4 @@ For one subject at a time across the whole project (OpenGL, 3D maths, shaders, n
 | 18. A start page | [18-the-start-page.md](18-the-start-page.md) |
 | 19. Odd shapes | [19-odd-shapes.md](19-odd-shapes.md) |
 | 20. Air jets | [20-air-jets.md](20-air-jets.md) |
+| 21. Placing anywhere | [21-placing-anywhere.md](21-placing-anywhere.md) |

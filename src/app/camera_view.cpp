@@ -83,11 +83,13 @@ void App::drawCameraView() {
     }
     const auto& camera = cameras[static_cast<std::size_t>(viewedCamera_)];
     const auto& spec = camera.spec;
-    if (spec.conveyor >= world_->conveyors().size()) {
+    const bool onBelt = spec.place.parent == Parent::Conveyor;
+    if (onBelt && spec.conveyor >= world_->conveyors().size()) {
         ImGui::End();
         return;
     }
-    const auto& conveyor = world_->conveyors()[spec.conveyor];
+    static const Conveyor none; // one standing on its own looks from its placement, not a belt
+    const auto& conveyor = spec.conveyor < world_->conveyors().size() ? world_->conveyors()[spec.conveyor] : none;
     const float available = ImGui::GetContentRegionAvail().x;
 
     if (spec.kind == CameraKind::Line) {

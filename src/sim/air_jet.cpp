@@ -16,7 +16,17 @@ float thrustOf(const AirJetSpec& spec) {
     return 1.25F * std::max(spec.pressure, 0.0F) * 1e5F * area;
 }
 
-std::vector<Nozzle> nozzlesOf(const AirJetSpec& spec, const ConveyorSpec& conveyor) {
+std::vector<Nozzle> nozzlesOf(const AirJetSpec& spec, const ConveyorSpec& belt) {
+    // Worked out on its belt (or a stand-in), then moved where it's placed.
+    const auto m = mounting(spec.place, &belt, spec.along);
+    auto nozzles = nozzlesOnBelt(spec, m.belt);
+    for (auto& n : nozzles) {
+        n = Nozzle{m.point(n.position), m.direction(n.direction)};
+    }
+    return nozzles;
+}
+
+std::vector<Nozzle> nozzlesOnBelt(const AirJetSpec& spec, const ConveyorSpec& conveyor) {
     const auto along = directionOf(conveyor.heading);
     const auto left = leftOf(along);
     const float side = spec.side == Side::Left ? 1.0F : -1.0F;

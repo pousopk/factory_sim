@@ -129,7 +129,7 @@ void App::turnSelection(float quarterTurns) {
 // scene as it is now, which nothing runs).
 std::vector<DrawBox> App::boxesToDraw() {
     const auto highlight = placing_ ? hovered_ : selected_;
-    if (!drag_) {
+    if (!dragging()) {
         return sceneBoxes(*world_, 1.0, highlight, placing_ ? std::nullopt : hoverPick_);
     }
     if (!preview_ || previewed_ != scene()) {

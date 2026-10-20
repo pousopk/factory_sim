@@ -1,5 +1,7 @@
 #pragma once
 #include "sim/conveyor_spec.hpp"
+#include "sim/mounting.hpp"
+#include "sim/placement.hpp"
 #include "sim/signal.hpp"
 #include <cstddef>
 #include <glm/glm.hpp>
@@ -61,6 +63,7 @@ struct PusherSpec {
     std::string name = "P1";
     std::size_t conveyor = 0;
     float along = 2.0F;        // metres from the belt's start, to the paddle's centre
+    Placement place;           // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     Side side = Side::Left;    // where it's mounted
     float paddleLength = 0.3F; // along the belt
     // Slow enough out that a pushed box drops into a bin beside the belt
@@ -80,6 +83,7 @@ struct DiverterSpec {
     std::string name = "D1";
     std::size_t conveyor = 0;
     float along = 1.0F;     // metres from the belt's start, to the pivot
+    Placement place;        // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     Side side = Side::Left; // where the pivot is
     float angle = 0.7F;     // radians the arm swings out (40 degrees)
     StrokeSpec stroke{0.015, 0.25, 0.25};
@@ -97,6 +101,7 @@ struct StopperSpec {
     std::string name = "S1";
     std::size_t conveyor = 0;
     float along = 2.5F;   // metres from the belt's start
+    Placement place;      // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     float height = 0.05F; // how far above the belt it rises
     StrokeSpec stroke{0.015, 0.06, 0.06};
 
@@ -113,6 +118,7 @@ struct BinSpec {
     std::string name = "Bin1";
     std::size_t conveyor = 0;
     float along = 2.0F; // metres from the belt's start, to the bin's centre
+    Placement place;    // on its conveyor as usual, nudged, or standing on its own (placement.hpp)
     Side side = Side::Right;
     glm::vec3 size{0.5F, 0.45F, 0.45F}; // along the belt, height, out from the belt
 
@@ -126,7 +132,9 @@ struct Pose {
     glm::vec3 size;
 };
 
-// Where the moving part of each actuator is, at a stroke position from 0 to 1.
+// Where the moving part of each actuator is, at a stroke position from 0 to 1,
+// wherever its placement puts it (`conveyor`: its belt; unused if it stands
+// on its own).
 // The physics moves its body there and the view draws it there: one formula,
 // so what's drawn is exactly what pushes.
 Pose pusherPaddle(const PusherSpec& spec, const ConveyorSpec& conveyor, double position);
@@ -134,7 +142,16 @@ Pose diverterArm(const DiverterSpec& spec, const ConveyorSpec& conveyor, double 
 Pose stopperBlade(const StopperSpec& spec, const ConveyorSpec& conveyor, double position);
 // The bin's floor and four walls.
 std::vector<Pose> binWalls(const BinSpec& spec, const ConveyorSpec& conveyor);
-// Where the bin's inside is: its centre and half size, for counting.
+// The same where the device would usually be on `conveyor`, ignoring its
+// placement (for drawing a whole device, then moving it all at once).
+Pose pusherPaddleOnBelt(const PusherSpec& spec, const ConveyorSpec& conveyor, double position);
+Pose diverterArmOnBelt(const DiverterSpec& spec, const ConveyorSpec& conveyor, double position);
+Pose stopperBladeOnBelt(const StopperSpec& spec, const ConveyorSpec& conveyor, double position);
+std::vector<Pose> binWallsOnBelt(const BinSpec& spec, const ConveyorSpec& conveyor);
+Pose binInsideOnBelt(const BinSpec& spec, const ConveyorSpec& conveyor);
+// A part worked out where its device would usually be, moved by its mounting.
+Pose moved(const Mounting& m, Pose pose);
+// Where the bin's inside is: its centre and size, for counting.
 Pose binInside(const BinSpec& spec, const ConveyorSpec& conveyor);
 
 // How far the guides (side rails) rise above the belt.
