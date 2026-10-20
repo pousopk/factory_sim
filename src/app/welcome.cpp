@@ -47,6 +47,10 @@ const std::vector<Demo>& demos() {
          "Frozen fish, bottles, bags, balls, brackets and an STL part past a photocell, a laser, a line-scan camera "
          "and a light curtain, which all see their real outlines.",
          [] { return shapesDemo(); }},
+        {"Rejecting: pusher and air jet",
+         "The same products, a third of them bad, on two lines: one rejects with a pusher, the other with an air "
+         "jet. Watch what each throws into its bin, and what it can't move.",
+         [] { return rejectDemo(); }},
     };
     return list;
 }

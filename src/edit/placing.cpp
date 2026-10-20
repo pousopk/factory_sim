@@ -88,6 +88,8 @@ template <class S, class F> bool withPlace(S& scene, Pick pick, F f) {
         return at(scene.diverters);
     case Pick::Kind::Stopper:
         return at(scene.stoppers);
+    case Pick::Kind::AirJet:
+        return at(scene.airJets);
     case Pick::Kind::Bin:
         return at(scene.bins);
     case Pick::Kind::Camera:
@@ -172,6 +174,9 @@ std::optional<Pick> addAt(Scene& scene, Pick::Kind kind, std::size_t conveyor, f
     case Pick::Kind::Stopper:
         added = Pick{kind, addStopper(scene, conveyor)};
         break;
+    case Pick::Kind::AirJet:
+        added = Pick{kind, addAirJet(scene, conveyor)};
+        break;
     case Pick::Kind::Bin:
         added = Pick{kind, addBin(scene, conveyor)};
         break;
@@ -216,6 +221,8 @@ std::optional<Clip> copyOf(const Scene& scene, Pick pick) {
         return from(scene.diverters);
     case Pick::Kind::Stopper:
         return from(scene.stoppers);
+    case Pick::Kind::AirJet:
+        return from(scene.airJets);
     case Pick::Kind::Bin:
         return from(scene.bins);
     case Pick::Kind::Camera:
@@ -305,6 +312,8 @@ Pick paste(Scene& scene, const Clip& clip, std::optional<std::size_t> conveyor, 
             } else if constexpr (std::is_same_v<T, StopperSpec>) {
                 return device(thing, scene.stoppers, Pick::Kind::Stopper, &StopperSpec::valveOutput,
                               &StopperSpec::extendedInput, &StopperSpec::retractedInput);
+            } else if constexpr (std::is_same_v<T, AirJetSpec>) {
+                return device(thing, scene.airJets, Pick::Kind::AirJet, &AirJetSpec::valveOutput);
             } else if constexpr (std::is_same_v<T, BinSpec>) {
                 return device(thing, scene.bins, Pick::Kind::Bin);
             } else if constexpr (std::is_same_v<T, CameraSpec>) {

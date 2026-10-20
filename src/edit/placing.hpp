@@ -46,8 +46,8 @@ void moveAlong(Scene& scene, Pick pick, float along);
 std::optional<Pick> addAt(Scene& scene, Pick::Kind kind, std::size_t conveyor, float along);
 
 // What Ctrl+C keeps: a copy of one thing in the scene.
-using Clip = std::variant<PlacedConveyor, PhotocellSpec, SpawnerSpec, PusherSpec, DiverterSpec, StopperSpec, BinSpec,
-                          CameraSpec, ProximitySpec, LaserSpec, LightCurtainSpec>;
+using Clip = std::variant<PlacedConveyor, PhotocellSpec, SpawnerSpec, PusherSpec, DiverterSpec, StopperSpec, AirJetSpec,
+                          BinSpec, CameraSpec, ProximitySpec, LaserSpec, LightCurtainSpec>;
 std::optional<Clip> copyOf(const Scene& scene, Pick pick);
 
 // Adds what the clip holds, as a new thing: the next free name of its kind,

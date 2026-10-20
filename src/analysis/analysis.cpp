@@ -22,6 +22,10 @@ std::vector<Trace> traces(const World& world) {
     std::for_each(world.pushers().begin(), world.pushers().end(), actuator);
     std::for_each(world.diverters().begin(), world.diverters().end(), actuator);
     std::for_each(world.stoppers().begin(), world.stoppers().end(), actuator);
+    for (const auto& j : world.airJets()) {
+        result.push_back(Trace{j.spec.name + " valve", j.spec.valveOutput, &j.valve()});
+        result.push_back(Trace{j.spec.name + " air", "", &j.air()});
+    }
     for (const auto& p : world.proximities()) {
         result.push_back(
             Trace{p.spec.name + (p.spec.inductive ? " inductive" : " capacitive"), p.spec.input, &p.detector.output});

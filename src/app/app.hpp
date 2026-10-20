@@ -111,6 +111,7 @@ private:
     void drawPusherInspector(std::size_t index);
     void drawDiverterInspector(std::size_t index);
     void drawStopperInspector(std::size_t index);
+    void drawAirJetInspector(std::size_t index);
     void drawBinInspector(std::size_t index);
     // The cameras (cameras.cpp): a camera's settings, the camera triggering
     // in the main panel, and the Cameras window (which camera took which

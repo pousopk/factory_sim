@@ -104,6 +104,7 @@ add_library(factory_sim_core STATIC
   src/sim/convex_pieces.cpp
   src/sim/scene.cpp
   src/sim/actuators.cpp
+  src/sim/air_jet.cpp
   src/sim/io.cpp
   src/sim/control.cpp
 )
@@ -205,6 +206,7 @@ if(FACTORY_SIM_BUILD_APP)
     src/app/files.cpp
     src/app/drives.cpp
     src/app/sensors.cpp
+    src/app/air_jets.cpp
     src/app/equipment.cpp
     src/app/editing.cpp
     src/app/camera_view.cpp

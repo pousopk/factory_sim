@@ -273,6 +273,9 @@ std::vector<IoAddress> usedAddresses(const Scene& scene) {
     std::for_each(scene.pushers.begin(), scene.pushers.end(), actuator);
     std::for_each(scene.diverters.begin(), scene.diverters.end(), actuator);
     std::for_each(scene.stoppers.begin(), scene.stoppers.end(), actuator);
+    for (const auto& j : scene.airJets) {
+        add(j.valveOutput);
+    }
     for (const auto& c : scene.cameras) {
         add(c.triggerOutput);
         add(c.readyInput);
@@ -353,6 +356,41 @@ SorterSpec sorterFor(const Scene& scene, std::size_t photocell, std::size_t push
     sorter.valveOutput = paddle.valveOutput;
     sorter.extendedInput = paddle.extendedInput;
     sorter.distance = std::max<std::int64_t>(0, std::llround(metres * conveyor.encoder.pulsesPerMetre()));
+    return sorter;
+}
+
+// For a jet, the air should meet the product's middle, and blow while its
+// middle third passes, for at most 80 ms: a longer blow throws light
+// products far over the bin (and air costs money). The sensor switches
+// on the product's front edge, so its middle is half a length behind; the
+// air has to start half the blow before the middle reaches the nozzles,
+// and the valve opens `openTime` before the air flows:
+//
+//   distance = (jet - sensor) + length / 2 - speed x (openTime + blow / 2)
+//
+// The valve stays open for the blow less the difference between closing
+// and opening (the air goes on flowing `closeTime` after it closes).
+SorterSpec sorterForJet(const Scene& scene, std::size_t photocell, std::size_t jet) {
+    const auto& sensor = scene.photocells.at(photocell);
+    const auto& air = scene.airJets.at(jet);
+    const auto& conveyor = scene.conveyors.at(air.conveyor).spec;
+    float length = 0.2F;
+    for (const auto& spawner : scene.spawners) {
+        if (spawner.conveyor == air.conveyor) {
+            length = spawner.size.x;
+        }
+    }
+    const double speed = std::max(conveyor.targetSpeed, 0.01F);
+    const double blow = std::clamp(length / speed / 3.0, 0.02, 0.08);
+    const double metres = (air.along - sensor.along) + length / 2.0 - speed * (air.openTime + blow / 2.0);
+    SorterSpec sorter;
+    sorter.name = "Sorter " + air.name;
+    sorter.nokInput = sensor.input;
+    sorter.encoderInput = scene.conveyors.at(sensor.conveyor).spec.encoderInput;
+    sorter.valveOutput = air.valveOutput;
+    sorter.extendedInput.clear();
+    sorter.distance = std::max<std::int64_t>(0, std::llround(metres * conveyor.encoder.pulsesPerMetre()));
+    sorter.pulse = std::max(0.01, blow - (air.closeTime - air.openTime));
     return sorter;
 }
 
@@ -489,6 +527,7 @@ std::unique_ptr<World> buildWorld(const Scene& scene, const ProgramMaker& make, 
         world->addCamera(camera); // (one on a missing conveyor sees nothing)
     }
     world->setFieldSensors(scene.proximities, scene.lasers, scene.curtains);
+    world->setAirJets(scene.airJets);
     world->setPanel(scene.buttons, scene.lamps, scene.potentiometers);
     world->setProgram(make(scene));
     return world;
@@ -502,6 +541,7 @@ void applyLive(World& world, const Scene& scene) {
     world.setPanel(scene.buttons, scene.lamps, scene.potentiometers);
     world.setCameras(scene.cameras);
     world.setFieldSensors(scene.proximities, scene.lasers, scene.curtains);
+    world.setAirJets(scene.airJets);
 }
 
 // ---------------------------------------------------------------- Editing
@@ -803,6 +843,7 @@ void removeConveyor(Scene& scene, std::size_t conveyor) {
     dropFrom(scene.pushers, conveyor);
     dropFrom(scene.diverters, conveyor);
     dropFrom(scene.stoppers, conveyor);
+    dropFrom(scene.airJets, conveyor);
     dropFrom(scene.bins, conveyor);
     dropFrom(scene.cameras, conveyor);
     dropFrom(scene.proximities, conveyor);
@@ -836,6 +877,16 @@ std::size_t addDiverter(Scene& scene, std::size_t conveyor) {
     return scene.diverters.size() - 1;
 }
 
+std::size_t addAirJet(Scene& scene, std::size_t conveyor) {
+    AirJetSpec jet;
+    jet.name = freeName(scene.airJets, "Y", [](const AirJetSpec& j) { return j.name; });
+    jet.conveyor = conveyor;
+    jet.along = scene.conveyors.at(conveyor).spec.length * 0.5F;
+    jet.valveOutput = freeAddress(scene, IoAddress::Area::Output, IoAddress::Size::Bit);
+    scene.airJets.push_back(jet);
+    return scene.airJets.size() - 1;
+}
+
 std::size_t addStopper(Scene& scene, std::size_t conveyor) {
     StopperSpec stopper;
     stopper.name = freeName(scene.stoppers, "S", [](const StopperSpec& s) { return s.name; });
@@ -854,13 +905,18 @@ std::size_t addBin(Scene& scene, std::size_t conveyor) {
     bin.name = freeName(scene.bins, "Bin", [](const BinSpec& b) { return b.name; });
     bin.conveyor = conveyor;
     bin.along = scene.conveyors.at(conveyor).spec.length / 2.0F;
-    // Opposite the last pusher on this conveyor, where it pushes boxes to.
-    for (const auto& pusher : scene.pushers) {
-        if (pusher.conveyor == conveyor) {
-            bin.along = pusher.along;
-            bin.side = pusher.side == Side::Left ? Side::Right : Side::Left;
+    // Opposite the last pusher (or air jet) on this conveyor, where it
+    // pushes boxes to.
+    const auto opposite = [&](const auto& actuators) {
+        for (const auto& a : actuators) {
+            if (a.conveyor == conveyor) {
+                bin.along = a.along;
+                bin.side = a.side == Side::Left ? Side::Right : Side::Left;
+            }
         }
-    }
+    };
+    opposite(scene.pushers);
+    opposite(scene.airJets);
     scene.bins.push_back(bin);
     return scene.bins.size() - 1;
 }
@@ -873,6 +929,9 @@ void removeDiverter(Scene& scene, std::size_t index) {
 }
 void removeStopper(Scene& scene, std::size_t index) {
     eraseAt(scene.stoppers, index);
+}
+void removeAirJet(Scene& scene, std::size_t index) {
+    eraseAt(scene.airJets, index);
 }
 void removeBin(Scene& scene, std::size_t index) {
     eraseAt(scene.bins, index);
@@ -1022,6 +1081,73 @@ Scene shapesDemo() {
     line.exposure = 0.0001;
     const auto curtain = addLightCurtain(scene, 0);
     scene.curtains[curtain].along = 3.4F;
+    return scene;
+}
+
+Scene rejectDemo() {
+    Scene scene;
+    // Two lines side by side, the same products on each.
+    for (int line = 0; line < 2; ++line) {
+        PlacedConveyor conveyor;
+        conveyor.spec.name = line == 0 ? "C1" : "C2";
+        conveyor.spec.start = {0.0F, 0.0F, line == 0 ? 0.0F : -1.4F};
+        conveyor.spec.length = 5.0F;
+        conveyor.spec.targetSpeed = 0.4F;
+        conveyor.spec.encoderInput = line == 0 ? "%ID8" : "%ID12";
+        scene.conveyors.push_back(conveyor);
+        const auto c = static_cast<std::size_t>(line);
+        // Small boxes and bags, then the main product, frozen fish (the
+        // sorter's timing is worked out for the last spawner's items).
+        const std::pair<Shape, double> products[] = {{Shape::Box, 3.7}, {Shape::Bag, 3.1}, {Shape::Fish, 2.3}};
+        for (const auto& [shape, interval] : products) {
+            SpawnerSpec spawner;
+            spawner.conveyor = c;
+            spawner.shape = shape;
+            spawner.size = shape == Shape::Box ? glm::vec3(0.15F, 0.10F, 0.12F) : typicalSize(shape);
+            spawner.interval = interval;
+            spawner.offset = 0.3F;
+            spawner.nokFraction = 0.33F;
+            spawner.atBeltSpeed = true;
+            scene.spawners.push_back(spawner);
+        }
+        PhotocellSpec inspection;
+        inspection.name = line == 0 ? "BQ1" : "BQ2";
+        inspection.conveyor = c;
+        inspection.along = 1.2F;
+        inspection.height = 0.01F;
+        inspection.onlyNok = true;
+        inspection.input = line == 0 ? "%IX0.0" : "%IX0.3";
+        scene.photocells.push_back(inspection);
+    }
+    PusherSpec pusher;
+    pusher.name = "P1";
+    pusher.along = 3.0F;
+    pusher.valveOutput = "%QX0.0";
+    pusher.extendedInput = "%IX0.1";
+    pusher.retractedInput = "%IX0.2";
+    scene.pushers.push_back(pusher);
+    addBin(scene, 0);
+    AirJetSpec jet;
+    jet.name = "Y1";
+    jet.conveyor = 1;
+    jet.along = 3.0F;
+    jet.side = Side::Right; // blowing away from the other line
+    // Set for the fish: six 5 mm nozzles low over the belt, under the
+    // fish's rounded edge. (Too strong for the bags, which it throws over
+    // the bin; the boxes are too heavy for any jet.)
+    jet.nozzles = 6;
+    jet.bore = 0.005F;
+    jet.height = 0.01F;
+    jet.valveOutput = "%QX0.1";
+    scene.airJets.push_back(jet);
+    // Its bin a little downstream, longer and wider, like a chute: what it
+    // blows off keeps the belt's speed along the line while it flies, and
+    // an iced fish slides on when it lands.
+    scene.bins[addBin(scene, 1)].along = 3.5F;
+    scene.bins.back().size = {0.8F, 0.45F, 0.7F};
+    scene.sorters.push_back(sorterFor(scene, 0, 0));
+    scene.sorters.push_back(sorterForJet(scene, 1, 0));
+    scene.control = Control::BuiltInSorting;
     return scene;
 }
 
@@ -1321,6 +1447,23 @@ std::string sceneToJson(const Scene& scene) {
         ioToJson(entry, s);
         data["stoppers"].push_back(entry);
     }
+    data["airJets"] = json::array();
+    for (const auto& j : scene.airJets) {
+        data["airJets"].push_back({{"name", j.name},
+                                   {"conveyor", j.conveyor},
+                                   {"along", j.along},
+                                   {"side", sideName(j.side)},
+                                   {"height", j.height},
+                                   {"nozzles", j.nozzles},
+                                   {"pitch", j.pitch},
+                                   {"aim", j.aim},
+                                   {"pressure", j.pressure},
+                                   {"bore", j.bore},
+                                   {"spread", j.spread},
+                                   {"openTime", j.openTime},
+                                   {"closeTime", j.closeTime},
+                                   {"valveOutput", j.valveOutput}});
+    }
     for (const auto& b : scene.bins) {
         data["bins"].push_back({{"name", b.name},
                                 {"conveyor", b.conveyor},
@@ -1410,7 +1553,8 @@ std::string sceneToJson(const Scene& scene) {
                                    {"encoderInput", s.encoderInput},
                                    {"valveOutput", s.valveOutput},
                                    {"extendedInput", s.extendedInput},
-                                   {"distance", s.distance}});
+                                   {"distance", s.distance},
+                                   {"pulse", s.pulse}});
     }
     data["cameraTriggers"] = json::array();
     for (const auto& t : scene.cameraTriggers) {
@@ -1602,6 +1746,27 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             }
             scene.stoppers.push_back(s);
         }
+        for (const auto& j : data.value("airJets", json::array())) {
+            AirJetSpec a;
+            a.name = j.value("name", a.name);
+            a.conveyor = j.value("conveyor", a.conveyor);
+            a.along = j.value("along", a.along);
+            a.side = sideFrom(j.value("side", json()), a.side);
+            a.height = j.value("height", a.height);
+            a.nozzles = j.value("nozzles", a.nozzles);
+            a.pitch = j.value("pitch", a.pitch);
+            a.aim = j.value("aim", a.aim);
+            a.pressure = j.value("pressure", a.pressure);
+            a.bore = j.value("bore", a.bore);
+            a.spread = j.value("spread", a.spread);
+            a.openTime = j.value("openTime", a.openTime);
+            a.closeTime = j.value("closeTime", a.closeTime);
+            a.valveOutput = j.value("valveOutput", std::string());
+            if (auto ok = checkConveyor(a.conveyor, "air jet " + a.name); !ok) {
+                return tl::unexpected(ok.error());
+            }
+            scene.airJets.push_back(a);
+        }
         for (const auto& j : data.value("bins", json::array())) {
             BinSpec b;
             b.name = j.value("name", b.name);
@@ -1721,6 +1886,7 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             s.valveOutput = j.value("valveOutput", s.valveOutput);
             s.extendedInput = j.value("extendedInput", s.extendedInput);
             s.distance = j.value("distance", s.distance);
+            s.pulse = j.value("pulse", s.pulse);
             scene.sorters.push_back(s);
         }
         for (const auto& j : data.value("cameraTriggers", json::array())) {

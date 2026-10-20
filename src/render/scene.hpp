@@ -25,6 +25,7 @@ struct Pick {
         Pusher,
         Diverter,
         Stopper,
+        AirJet,
         Bin,
         Camera,
         Proximity,
@@ -80,6 +81,9 @@ std::vector<DrawBox> photocellBoxes(const Photocell& photocell, const Conveyor& 
 std::vector<DrawBox> pusherBoxes(const Pusher& pusher, const ConveyorSpec& conveyor);
 std::vector<DrawBox> diverterBoxes(const Diverter& diverter, const ConveyorSpec& conveyor);
 std::vector<DrawBox> stopperBoxes(const Stopper& stopper, const ConveyorSpec& conveyor);
+// An air jet: its manifold and nozzles, an LED lit while its valve is open,
+// and a faint streak of air from each nozzle while it blows.
+std::vector<DrawBox> airJetBoxes(const AirJet& jet, const ConveyorSpec& conveyor);
 std::vector<DrawBox> binBoxes(const Bin& bin, const ConveyorSpec& conveyor);
 
 // A camera: its body and lens, looking at the belt from where its tilt puts

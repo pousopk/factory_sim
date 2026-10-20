@@ -27,6 +27,9 @@ const glm::vec3 kCameraColor{0.15F, 0.16F, 0.18F};
 const glm::vec3 kLensColor{0.05F, 0.05F, 0.06F};
 const glm::vec3 kViewColor{0.35F, 0.60F, 1.00F};
 const glm::vec3 kPostColor{0.55F, 0.57F, 0.60F};
+const glm::vec3 kManifoldColor{0.25F, 0.45F, 0.70F};
+const glm::vec3 kNozzleColor{0.75F, 0.76F, 0.78F};
+const glm::vec3 kAirColor{0.80F, 0.92F, 1.00F};
 
 DrawBox fromPose(const Pose& pose, glm::vec3 color) {
     DrawBox box;
@@ -184,6 +187,49 @@ std::vector<DrawBox> diverterBoxes(const Diverter& diverter, const ConveyorSpec&
     boxes.push_back(fromPose(arm, kArmColor));
     boxes.push_back(led(glm::vec3(pivot.x, conveyor.beltHeight + 0.125F, pivot.z), rest.rotation,
                         diverter.stroke.extended().value()));
+    return boxes;
+}
+
+std::vector<DrawBox> airJetBoxes(const AirJet& jet, const ConveyorSpec& conveyor) {
+    std::vector<DrawBox> boxes;
+    const auto nozzles = nozzlesOf(jet.spec, conveyor);
+    if (nozzles.empty()) {
+        return boxes;
+    }
+    const auto along = directionOf(conveyor.heading);
+    const glm::vec3 up{0.0F, 1.0F, 0.0F};
+    const auto heading = glm::angleAxis(conveyor.heading, up);
+    const auto out = -nozzles.front().direction * glm::vec3(1.0F, 0.0F, 1.0F); // away from the belt, level
+    const auto outward = glm::length(out) > 1e-6F ? glm::normalize(out) : leftOf(along);
+    // The manifold behind the nozzles, along the belt.
+    glm::vec3 middle(0.0F);
+    for (const auto& n : nozzles) {
+        middle += n.position;
+    }
+    middle /= static_cast<float>(nozzles.size());
+    const float row = static_cast<float>(nozzles.size() - 1) * jet.spec.pitch + 0.03F;
+    const auto manifold = middle + outward * 0.035F;
+    boxes.push_back(fromPose(Pose{manifold, heading, {row, 0.025F, 0.025F}}, kManifoldColor));
+    boxes.push_back(led(manifold + up * 0.017F, heading, jet.valve().value()));
+    // A box whose length runs along `axis`: its own x turned onto it.
+    const auto alongAxis = [&](glm::vec3 axis) {
+        const auto side = glm::normalize(glm::cross(axis, up));
+        return glm::quat_cast(glm::mat3(axis, glm::cross(side, axis), side));
+    };
+    for (const auto& n : nozzles) {
+        const auto turn = alongAxis(n.direction);
+        boxes.push_back(fromPose(Pose{n.position - n.direction * 0.015F, turn, {0.03F, 0.008F, 0.008F}}, kNozzleColor));
+        if (jet.air().value()) {
+            // The air: a pale streak as wide as the jet halfway along it.
+            constexpr float kShown = 0.3F;
+            const float width = 2.0F * kShown / 2.0F * std::tan(jet.spec.spread);
+            auto air =
+                fromPose(Pose{n.position + n.direction * (kShown / 2.0F), turn, {kShown, width, width}}, kAirColor);
+            air.alpha = 0.18F;
+            air.unlit = true;
+            boxes.push_back(air);
+        }
+    }
     return boxes;
 }
 
@@ -422,6 +468,13 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
                      hovered);
         }
     }
+    for (std::size_t i = 0; i < world.airJets().size(); ++i) {
+        const auto& a = world.airJets()[i];
+        if (onConveyor(a.spec.conveyor)) {
+            addParts(boxes, airJetBoxes(a, conveyors[a.spec.conveyor].spec), Pick{Pick::Kind::AirJet, i}, selected,
+                     hovered);
+        }
+    }
     for (std::size_t i = 0; i < world.bins().size(); ++i) {
         const auto& b = world.bins()[i];
         if (onConveyor(b.spec.conveyor)) {
@@ -585,6 +638,7 @@ std::vector<Label> sceneLabels(const World& world) {
     actuator(world.pushers(), Pick::Kind::Pusher);
     actuator(world.diverters(), Pick::Kind::Diverter);
     actuator(world.stoppers(), Pick::Kind::Stopper);
+    actuator(world.airJets(), Pick::Kind::AirJet);
     actuator(world.bins(), Pick::Kind::Bin);
     for (std::size_t i = 0; i < world.cameras().size(); ++i) {
         const auto& c = world.cameras()[i].spec;

@@ -1,5 +1,6 @@
 #pragma once
 #include "sim/actuators.hpp"
+#include "sim/air_jet.hpp"
 #include "sim/camera.hpp"
 #include "sim/control.hpp"
 #include "sim/conveyor_spec.hpp"
@@ -12,6 +13,7 @@
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
 #include <memory>
+#include <optional>
 #include <random>
 #include <string>
 #include <vector>
@@ -236,6 +238,25 @@ public:
     const std::vector<Laser>& lasers() const { return lasers_; }
     const std::vector<LightCurtain>& curtains() const { return curtains_; }
 
+    // ---- Air jets
+    // Settings while running (they have no body, only air): each keeps its
+    // valve's state if it stays on its conveyor.
+    void setAirJets(const std::vector<AirJetSpec>& specs);
+    std::vector<AirJet>& airJets() { return airJets_; }
+    const std::vector<AirJet>& airJets() const { return airJets_; }
+    void blowAirJet(std::size_t jet, double seconds); // now, by hand
+
+    // Where a ray from `origin` in `direction` (a unit vector) first hits
+    // an item within `length`: which item (its index), how far, the point
+    // and the surface's normal there (facing the ray).
+    struct ItemHit {
+        std::size_t item;
+        float distance;
+        glm::vec3 point;
+        glm::vec3 normal;
+    };
+    std::optional<ItemHit> hitItem(glm::vec3 origin, glm::vec3 direction, float length) const;
+
     std::vector<Bin>& bins() { return bins_; }
     const std::vector<Bin>& bins() const { return bins_; }
 
@@ -281,6 +302,7 @@ private:
     void updatePhotocells(double stepStart, double stepEnd);
     void updateActuators(double stepStart, double stepEnd);
     void updateBins();
+    void updateAirJets(double stepStart, double stepEnd);
     void updateCameras(double stepEnd);
     void takeLines(Camera& camera, double stepEnd);
     void takeLine(Camera& camera, double time, double stepEnd);
@@ -306,6 +328,7 @@ private:
     std::vector<Pusher> pushers_;
     std::vector<Diverter> diverters_;
     std::vector<Stopper> stoppers_;
+    std::vector<AirJet> airJets_;
     std::vector<Bin> bins_;
     std::vector<Camera> cameras_;
     std::vector<Proximity> proximities_;

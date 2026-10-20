@@ -196,6 +196,16 @@ std::string App::describe(Pick pick) const {
         }
         return describeActuator(s.stoppers, w.stoppers(), "stopper");
     }
+    case Pick::Kind::AirJet:
+        if (pick.index < s.airJets.size() && pick.index < w.airJets().size()) {
+            const auto& a = s.airJets[pick.index];
+            const auto& jet = w.airJets()[pick.index];
+            return fmt::format("{}: air jet on {} at {:.2f} m, {} x {:.1f} mm at {:.1f} bar, {}", a.name,
+                               on(a.conveyor), a.along, a.nozzles, a.bore * 1000.0F, a.pressure,
+                               jet.air().value() ? fmt::format("blowing, pushing {:.1f} N", jet.lastPush) : "off") +
+                   io(a.valveOutput, "valve");
+        }
+        break;
     case Pick::Kind::Bin:
         if (pick.index < s.bins.size() && pick.index < w.bins().size()) {
             const auto& bin = w.bins()[pick.index];
@@ -294,6 +304,14 @@ void App::drawLineTree() {
         actuator(Pick::Kind::Pusher, s.pushers, w.pushers(), "pusher");
         actuator(Pick::Kind::Diverter, s.diverters, w.diverters(), "diverter");
         actuator(Pick::Kind::Stopper, s.stoppers, w.stoppers(), "stopper");
+        add(Pick::Kind::AirJet, s.airJets, [&](const AirJetSpec& a, std::size_t k, Row& r) {
+            r.name = a.name;
+            r.what = fmt::format("air jet {:.2f} m", a.along);
+            if (k < w.airJets().size()) {
+                r.on = w.airJets()[k].air().value();
+            }
+            r.detail = a.valveOutput;
+        });
         add(Pick::Kind::Bin, s.bins, [&](const BinSpec& b, std::size_t k, Row& r) {
             r.name = b.name;
             r.what = fmt::format("bin {:.2f} m", b.along);

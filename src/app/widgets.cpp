@@ -58,4 +58,13 @@ void conveyorCombo(const char* label, std::size_t& conveyor, const Scene& scene)
     }
 }
 
+void sideCombo(Side& side) {
+    int value = side == Side::Left ? 0 : 1;
+    ImGui::SetNextItemWidth(fieldWidth());
+    if (ImGui::Combo("side", &value, "left\0right\0")) {
+        side = value == 0 ? Side::Left : Side::Right;
+    }
+    ImGui::SetItemTooltip("Left or right, looking along the belt's travel");
+}
+
 } // namespace fsim

@@ -26,6 +26,9 @@ bool scaledSlider(const char* label, float& value, float scale, float min, float
 // An address, typed in: red when it isn't an address of the expected kind.
 void addressField(const char* label, std::string& text, IoAddress::Area area, IoAddress::Size size);
 
+// Left or right of the belt, looking along its travel.
+void sideCombo(Side& side);
+
 // A combo to pick one of the scene's conveyors, by name.
 void conveyorCombo(const char* label, std::size_t& conveyor, const Scene& scene);
 

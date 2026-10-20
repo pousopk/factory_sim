@@ -375,6 +375,11 @@ std::int64_t World::encoderCountAt(std::size_t conveyor, double t) const {
 }
 
 std::size_t World::addSpawner(const SpawnerSpec& spec) {
+    // An STL part is read and split into pieces now, while the line is
+    // being built, not in the middle of the run when the first one is due.
+    if (spec.shape != Shape::Box && spec.shape != Shape::Tin) {
+        (void)itemGeometry(spec.shape, spec.size, spec.stl);
+    }
     spawners_.push_back(spec);
     spawnerStates_.push_back(SpawnerState{time() + spec.interval, false, {}});
     return spawners_.size() - 1;
@@ -511,6 +516,7 @@ void World::step() {
     updateConveyors();
     updateCarriages(stepStart, stepStart + kStep);
     updateActuators(stepStart, stepStart + kStep);
+    updateAirJets(stepStart, stepStart + kStep); // its push is applied in the physics step
     updateSpawners();
     physics_.step(static_cast<float>(kStep));
     removeFallenItems();
@@ -673,6 +679,11 @@ void World::scan(double time) {
     std::for_each(pushers_.begin(), pushers_.end(), valve);
     std::for_each(diverters_.begin(), diverters_.end(), valve);
     std::for_each(stoppers_.begin(), stoppers_.end(), valve);
+    for (auto& jet : airJets_) {
+        if (const auto open = read(jet.spec.valveOutput)) {
+            jet.command(time, *open);
+        }
+    }
     for (auto& conveyor : conveyors_) {
         if (conveyor.spec.drive.fitted) {
             // The telegram: two output words, read as the PLC wrote them.
@@ -964,6 +975,173 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
         }
         curtain.blocked = static_cast<int>(std::count(curtain.broken.begin(), curtain.broken.end(), true));
         curtain.clear.set(stepEnd, curtain.blocked == 0);
+    }
+}
+
+// ---------------------------------------------------------------- Air jets
+
+void World::setAirJets(const std::vector<AirJetSpec>& specs) {
+    airJets_.resize(specs.size());
+    for (std::size_t i = 0; i < specs.size(); ++i) {
+        if (airJets_[i].spec.conveyor != specs[i].conveyor) {
+            airJets_[i] = AirJet(specs[i]); // on another conveyor: another jet
+        }
+        airJets_[i].spec = specs[i];
+    }
+}
+
+void World::blowAirJet(std::size_t jet, double seconds) {
+    if (jet < airJets_.size()) {
+        airJets_[jet].blow(time(), seconds);
+    }
+}
+
+namespace {
+
+// A ray against a box of half size `half` around the origin, in the box's
+// own axes (the slab method: where it enters each pair of faces; it's in
+// the box from the last entry to the first exit). The distance and the
+// face's normal.
+std::optional<std::pair<float, glm::vec3>> rayBox(glm::vec3 from, glm::vec3 way, glm::vec3 half, float length) {
+    float enter = 0.0F;
+    float exit = length;
+    glm::vec3 normal = -way;
+    for (int axis = 0; axis < 3; ++axis) {
+        if (std::abs(way[axis]) < 1e-9F) {
+            if (std::abs(from[axis]) > half[axis]) {
+                return std::nullopt; // parallel to this pair of faces, and outside them
+            }
+            continue;
+        }
+        float t1 = (-half[axis] - from[axis]) / way[axis];
+        float t2 = (half[axis] - from[axis]) / way[axis];
+        float sign = -1.0F; // entering through the low face
+        if (t1 > t2) {
+            std::swap(t1, t2);
+            sign = 1.0F;
+        }
+        if (t1 > enter) {
+            enter = t1;
+            normal = glm::vec3(0.0F);
+            normal[axis] = sign;
+        }
+        exit = std::min(exit, t2);
+        if (enter > exit) {
+            return std::nullopt;
+        }
+    }
+    return std::pair{enter, normal};
+}
+
+// A ray against an upright cylinder (radius `radius` around its own y axis,
+// half height `halfHeight`), in its own axes: its side or a lid.
+std::optional<std::pair<float, glm::vec3>> rayCylinder(glm::vec3 from, glm::vec3 way, float radius, float halfHeight,
+                                                       float length) {
+    std::optional<std::pair<float, glm::vec3>> best;
+    const auto keep = [&](float t, glm::vec3 n) {
+        if (t >= 0.0F && t <= length && (!best || t < best->first)) {
+            best = std::pair{t, n};
+        }
+    };
+    // The side: x² + z² = r², between the lids.
+    const float a = way.x * way.x + way.z * way.z;
+    if (a > 1e-12F) {
+        const float b = 2.0F * (from.x * way.x + from.z * way.z);
+        const float c = from.x * from.x + from.z * from.z - radius * radius;
+        const float d = b * b - 4.0F * a * c;
+        if (d >= 0.0F) {
+            const float t = (-b - std::sqrt(d)) / (2.0F * a);
+            const auto p = from + way * t;
+            if (std::abs(p.y) <= halfHeight) {
+                keep(t, glm::normalize(glm::vec3(p.x, 0.0F, p.z)));
+            }
+        }
+    }
+    // The lids.
+    if (std::abs(way.y) > 1e-9F) {
+        for (const float lid : {-halfHeight, halfHeight}) {
+            const float t = (lid - from.y) / way.y;
+            const auto p = from + way * t;
+            if (p.x * p.x + p.z * p.z <= radius * radius) {
+                keep(t, glm::vec3(0.0F, lid > 0.0F ? 1.0F : -1.0F, 0.0F));
+            }
+        }
+    }
+    if (best && glm::dot(best->second, way) > 0.0F) {
+        best->second = -best->second;
+    }
+    return best;
+}
+
+} // namespace
+
+std::optional<World::ItemHit> World::hitItem(glm::vec3 origin, glm::vec3 direction, float length) const {
+    const auto& bodies = physics_.bodies();
+    std::optional<ItemHit> best;
+    for (std::size_t i = 0; i < items_.size(); ++i) {
+        const auto& item = items_[i];
+        const auto center = toGlm(JPH::Vec3(bodies.GetPosition(item.body)));
+        // Too far from the ray to be touched: past its bounding sphere.
+        const float radius = glm::length(item.size) / 2.0F;
+        const float along = glm::dot(center - origin, direction);
+        if (along < -radius || along > length + radius || glm::length(center - (origin + direction * along)) > radius) {
+            continue;
+        }
+        const auto rotation = glm::mat3_cast(toGlm(bodies.GetRotation(item.body)));
+        std::optional<std::pair<float, glm::vec3>> hit; // distance, normal (in the world's axes)
+        if (item.geometry != nullptr) {
+            glm::vec3 normal;
+            if (const auto d = item.geometry->castRay(center, rotation, origin, direction, length, &normal)) {
+                hit = std::pair{*d, normal};
+            }
+        } else {
+            const auto from = glm::transpose(rotation) * (origin - center);
+            const auto way = glm::transpose(rotation) * direction;
+            const auto local = item.shape == Shape::Tin
+                                   ? rayCylinder(from, way, item.size.x / 2.0F, item.size.y / 2.0F, length)
+                                   : rayBox(from, way, item.size / 2.0F, length);
+            if (local) {
+                hit = std::pair{local->first, rotation * local->second};
+            }
+        }
+        if (hit && (!best || hit->first < best->distance)) {
+            best = ItemHit{i, hit->first, origin + direction * hit->first, hit->second};
+        }
+    }
+    return best;
+}
+
+// Each jet's streams push what they hit: at the point they hit it, at right
+// angles to its surface, by the share of their thrust that's square to it.
+// Jolt applies the forces in the step that follows.
+void World::updateAirJets(double stepStart, double stepEnd) {
+    auto& bodies = physics_.bodies();
+    for (auto& jet : airJets_) {
+        const double flowing = jet.update(stepStart, stepEnd);
+        jet.lastPush = 0.0F;
+        if (flowing <= 0.0 || jet.spec.conveyor >= conveyors_.size() || items_.empty()) {
+            continue;
+        }
+        const auto& conveyor = conveyors_[jet.spec.conveyor].spec;
+        constexpr float kReach = 0.8F; // m: past that, the jet has spread and slowed to nothing useful
+        for (const auto& nozzle : nozzlesOf(jet.spec, conveyor)) {
+            const auto streams = streamsAround(nozzle.direction, jet.spec.spread);
+            const float share = thrustOf(jet.spec) * static_cast<float>(flowing) / static_cast<float>(streams.size());
+            for (const auto& stream : streams) {
+                const auto hit = hitItem(nozzle.position, stream, kReach);
+                if (!hit) {
+                    continue;
+                }
+                const float square = -glm::dot(stream, hit->normal); // 1: head on; 0: grazing
+                if (square <= 0.0F) {
+                    continue;
+                }
+                const auto force = -hit->normal * (share * square);
+                bodies.AddForce(items_[hit->item].body, toJolt(force),
+                                JPH::RVec3(hit->point.x, hit->point.y, hit->point.z));
+                jet.lastPush += share * square;
+            }
+        }
     }
 }
 

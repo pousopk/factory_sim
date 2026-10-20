@@ -324,6 +324,9 @@ void App::deleteSelected() {
     case Pick::Kind::Stopper:
         removeStopper(scene(), selected_->index);
         break;
+    case Pick::Kind::AirJet:
+        removeAirJet(scene(), selected_->index);
+        break;
     case Pick::Kind::Bin:
         removeBin(scene(), selected_->index);
         break;
@@ -373,6 +376,9 @@ void App::keepSelectionValid() {
         break;
     case Pick::Kind::Stopper:
         count = s.stoppers.size();
+        break;
+    case Pick::Kind::AirJet:
+        count = s.airJets.size();
         break;
     case Pick::Kind::Bin:
         count = s.bins.size();
@@ -449,11 +455,17 @@ void App::drawLinePanel() {
     const struct {
         const char* label;
         Pick::Kind kind;
-    } devices[] = {{"Photocell", Pick::Kind::Photocell}, {"Spawner", Pick::Kind::Spawner},
-                   {"Pusher", Pick::Kind::Pusher},       {"Diverter", Pick::Kind::Diverter},
-                   {"Stopper", Pick::Kind::Stopper},     {"Bin", Pick::Kind::Bin},
-                   {"Camera", Pick::Kind::Camera},       {"Proximity", Pick::Kind::Proximity},
-                   {"Laser", Pick::Kind::Laser},         {"Light curtain", Pick::Kind::LightCurtain}};
+    } devices[] = {{"Photocell", Pick::Kind::Photocell},
+                   {"Spawner", Pick::Kind::Spawner},
+                   {"Pusher", Pick::Kind::Pusher},
+                   {"Diverter", Pick::Kind::Diverter},
+                   {"Stopper", Pick::Kind::Stopper},
+                   {"Air jet", Pick::Kind::AirJet},
+                   {"Bin", Pick::Kind::Bin},
+                   {"Camera", Pick::Kind::Camera},
+                   {"Proximity", Pick::Kind::Proximity},
+                   {"Laser", Pick::Kind::Laser},
+                   {"Light curtain", Pick::Kind::LightCurtain}};
     for (std::size_t i = 0; i < std::size(devices); ++i) {
         if (i % 4 != 0) {
             ImGui::SameLine();
@@ -506,6 +518,9 @@ void App::drawInspector() {
             break;
         case Pick::Kind::Stopper:
             drawStopperInspector(selected_->index);
+            break;
+        case Pick::Kind::AirJet:
+            drawAirJetInspector(selected_->index);
             break;
         case Pick::Kind::Bin:
             drawBinInspector(selected_->index);
@@ -897,15 +912,6 @@ void led(const char* label, bool on) {
                        ImGuiColorEditFlags_NoTooltip, ImVec2(14, 14));
 }
 
-void sideCombo(Side& side) {
-    int value = side == Side::Left ? 0 : 1;
-    ImGui::SetNextItemWidth(fieldWidth());
-    if (ImGui::Combo("side", &value, "left\0right\0")) {
-        side = value == 0 ? Side::Left : Side::Right;
-    }
-    ImGui::SetItemTooltip("Left or right, looking along the belt's travel");
-}
-
 void strokeTimes(StrokeSpec& stroke) {
     scaledSlider("dead time", stroke.deadTime, 1000.0, 0.0F, 100.0F, "%.0f ms");
     ImGui::SetItemTooltip("From the valve switching to the movement starting: air flowing, pressure building");
@@ -1107,13 +1113,18 @@ void App::drawControl() {
             addressField("NOK sensor", sorter.nokInput, IoAddress::Area::Input, IoAddress::Size::Bit);
             addressField("encoder count", sorter.encoderInput, IoAddress::Area::Input, IoAddress::Size::DoubleWord);
             addressField("valve", sorter.valveOutput, IoAddress::Area::Output, IoAddress::Size::Bit);
-            addressField("extended", sorter.extendedInput, IoAddress::Area::Input, IoAddress::Size::Bit);
+            if (sorter.pulse > 0.0) {
+                scaledSlider("blow", sorter.pulse, 1000.0, 5.0F, 1000.0F, "%.0f ms");
+                ImGui::SetItemTooltip("How long it opens an air jet's valve (rounded up to whole scans)");
+            } else {
+                addressField("extended", sorter.extendedInput, IoAddress::Area::Input, IoAddress::Size::Bit);
+            }
             int distance = static_cast<int>(sorter.distance);
             ImGui::SetNextItemWidth(fieldWidth());
             if (ImGui::DragInt("distance", &distance, 10.0F, 0, 1000000, "%d pulses")) {
                 sorter.distance = distance;
             }
-            ImGui::SetItemTooltip("Encoder pulses from the sensor seeing a bad box to firing the pusher");
+            ImGui::SetItemTooltip("Encoder pulses from the sensor seeing a bad box to firing");
             if (ImGui::SmallButton("Remove")) {
                 remove = i;
             }
@@ -1124,12 +1135,18 @@ void App::drawControl() {
     if (remove) {
         s.sorters.erase(s.sorters.begin() + static_cast<std::ptrdiff_t>(*remove));
     }
-    // A new sorter, wired to a sensor and a pusher chosen here.
+    // A new sorter, wired to a sensor and an actuator (a pusher or an air
+    // jet) chosen here.
     int& sensor = newSorterSensor_;
-    int& pusher = newSorterPusher_;
-    if (!s.photocells.empty() && !s.pushers.empty()) {
+    int& actuator = newSorterPusher_;
+    const int actuators = static_cast<int>(s.pushers.size() + s.airJets.size());
+    const auto actuatorName = [&](int i) {
+        const auto k = static_cast<std::size_t>(i);
+        return k < s.pushers.size() ? s.pushers[k].name : s.airJets[k - s.pushers.size()].name;
+    };
+    if (!s.photocells.empty() && actuators > 0) {
         sensor = std::clamp(sensor, 0, static_cast<int>(s.photocells.size()) - 1);
-        pusher = std::clamp(pusher, 0, static_cast<int>(s.pushers.size()) - 1);
+        actuator = std::clamp(actuator, 0, actuators - 1);
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
         if (ImGui::BeginCombo("##sensor", s.photocells[static_cast<std::size_t>(sensor)].name.c_str())) {
             for (std::size_t i = 0; i < s.photocells.size(); ++i) {
@@ -1141,20 +1158,23 @@ void App::drawControl() {
         }
         ImGui::SameLine();
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 6.9F);
-        if (ImGui::BeginCombo("##pusher", s.pushers[static_cast<std::size_t>(pusher)].name.c_str())) {
-            for (std::size_t i = 0; i < s.pushers.size(); ++i) {
-                if (ImGui::Selectable(s.pushers[i].name.c_str(), static_cast<int>(i) == pusher)) {
-                    pusher = static_cast<int>(i);
+        if (ImGui::BeginCombo("##actuator", actuatorName(actuator).c_str())) {
+            for (int i = 0; i < actuators; ++i) {
+                if (ImGui::Selectable(actuatorName(i).c_str(), i == actuator)) {
+                    actuator = i;
                 }
             }
             ImGui::EndCombo();
         }
         ImGui::SameLine();
         if (ImGui::SmallButton("Add sorter")) {
-            s.sorters.push_back(sorterFor(s, static_cast<std::size_t>(sensor), static_cast<std::size_t>(pusher)));
+            const auto k = static_cast<std::size_t>(actuator);
+            s.sorters.push_back(k < s.pushers.size()
+                                    ? sorterFor(s, static_cast<std::size_t>(sensor), k)
+                                    : sorterForJet(s, static_cast<std::size_t>(sensor), k - s.pushers.size()));
         }
-        ImGui::SetItemTooltip("Wired to this sensor and pusher, with the distance worked out from the layout\n"
-                              "and the belt's speed");
+        ImGui::SetItemTooltip("Wired to this sensor and pusher or air jet, with when to fire (and a jet's blow)\n"
+                              "worked out from the layout and the belt's speed");
     }
 }
 
@@ -1205,6 +1225,8 @@ void App::drawIoTable() {
         actuator(a, "diverter");
     for (const auto& a : s.stoppers)
         actuator(a, "stopper");
+    for (const auto& a : s.airJets)
+        add(a.valveOutput, a.name + " air jet valve");
     for (const auto& p : s.proximities) {
         add(p.input, p.name + (p.inductive ? " inductive switch" : " capacitive switch"));
     }

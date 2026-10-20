@@ -102,9 +102,10 @@ public:
     void slice(glm::vec3 center, const glm::mat3& rotation, float y, glm::vec3 axis,
                std::vector<std::pair<float, float>>& out) const;
     // The distance along a ray from `origin` in `direction` (a unit vector)
-    // to its surface, if it hits within `length`.
+    // to its surface, if it hits within `length`; and if `normal` is given,
+    // the surface's normal there (facing the ray).
     std::optional<float> castRay(glm::vec3 center, const glm::mat3& rotation, glm::vec3 origin, glm::vec3 direction,
-                                 float length) const;
+                                 float length, glm::vec3* normal = nullptr) const;
 
 private:
     struct Jolt; // the Jolt shapes, kept out of this header

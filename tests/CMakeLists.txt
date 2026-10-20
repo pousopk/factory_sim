@@ -16,6 +16,7 @@ add_executable(factory_sim_tests
   sim/linescan_test.cpp
   sim/item_shape_test.cpp
   sim/shapes_test.cpp
+  sim/air_jet_test.cpp
   render/scene_test.cpp
   render/orbit_camera_test.cpp
   edit/scene_history_test.cpp

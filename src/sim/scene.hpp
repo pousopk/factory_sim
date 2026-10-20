@@ -55,6 +55,7 @@ struct Scene {
     std::vector<PusherSpec> pushers;
     std::vector<DiverterSpec> diverters;
     std::vector<StopperSpec> stoppers;
+    std::vector<AirJetSpec> airJets;
     std::vector<BinSpec> bins;
     std::vector<CameraSpec> cameras;
     std::vector<ProximitySpec> proximities;
@@ -133,6 +134,9 @@ std::string freeAddress(const Scene& scene, IoAddress::Area area, IoAddress::Siz
 // conveyor: their addresses, and the distance in encoder pulses worked out
 // from the layout (see the comment in scene.cpp).
 SorterSpec sorterFor(const Scene& scene, std::size_t photocell, std::size_t pusher);
+// The same for an air jet: when to open its valve, and for how long, so its
+// air meets the product's middle and blows while about half of it passes.
+SorterSpec sorterForJet(const Scene& scene, std::size_t photocell, std::size_t jet);
 
 // A new world for the scene (no boxes yet, time 0), controlled by the program
 // `make` gives (by default, makeProgram).
@@ -188,10 +192,12 @@ void removeSpawner(Scene& scene, std::size_t spawner);
 std::size_t addPusher(Scene& scene, std::size_t conveyor);
 std::size_t addDiverter(Scene& scene, std::size_t conveyor);
 std::size_t addStopper(Scene& scene, std::size_t conveyor);
+std::size_t addAirJet(Scene& scene, std::size_t conveyor); // halfway, on the left
 std::size_t addBin(Scene& scene, std::size_t conveyor);
 void removePusher(Scene& scene, std::size_t index);
 void removeDiverter(Scene& scene, std::size_t index);
 void removeStopper(Scene& scene, std::size_t index);
+void removeAirJet(Scene& scene, std::size_t index);
 void removeBin(Scene& scene, std::size_t index);
 
 // Gives `conveyor` a drive on the bus, with the telegram's four words at the
@@ -213,6 +219,12 @@ Scene sensorsDemo();
 // photocell, a laser, a line-scan camera and a light curtain, which all see
 // their real outlines.
 Scene shapesDemo();
+
+// Two ways to reject, side by side: the same products (frozen fish, bags of
+// crisps, small boxes), a third of them bad, on two lines; one rejects with
+// a pusher, the other with an air jet, each into a bin, each run by the
+// built-in sorter.
+Scene rejectDemo();
 
 // New sensors on `conveyor`, named and wired to the next free addresses.
 // Each returns its index.

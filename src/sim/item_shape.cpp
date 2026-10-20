@@ -306,7 +306,7 @@ void ItemGeometry::slice(glm::vec3 center, const glm::mat3& rotation, float y, g
 }
 
 std::optional<float> ItemGeometry::castRay(glm::vec3 center, const glm::mat3& rotation, glm::vec3 origin,
-                                           glm::vec3 direction, float length) const {
+                                           glm::vec3 direction, float length, glm::vec3* normal) const {
     if (jolt_->surface == nullptr) {
         return std::nullopt;
     }
@@ -316,6 +316,15 @@ std::optional<float> ItemGeometry::castRay(glm::vec3 center, const glm::mat3& ro
     JPH::RayCastResult hit;
     if (!jolt_->surface->CastRay(ray, JPH::SubShapeIDCreator(), hit)) {
         return std::nullopt;
+    }
+    if (normal != nullptr) {
+        // The triangle's normal, turned to face the ray (a ray can hit a
+        // triangle from behind), back in the world's axes.
+        auto n = toGlm(jolt_->surface->GetSurfaceNormal(hit.mSubShapeID2, ray.GetPointOnRay(hit.mFraction)));
+        if (glm::dot(n, way) > 0.0F) {
+            n = -n;
+        }
+        *normal = rotation * n;
     }
     return hit.mFraction * length;
 }

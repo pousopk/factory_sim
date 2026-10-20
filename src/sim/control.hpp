@@ -46,8 +46,9 @@ struct LampSpec {
 
 // The built-in sorter: when the NOK sensor sees a box, it notes the encoder
 // count; when the belt has moved `distance` pulses further, it fires the
-// pusher; when the pusher is fully out, it pulls it back. Like a PLC
-// program, it knows only addresses.
+// pusher; when the pusher is fully out, it pulls it back. Or, for an air
+// jet (`pulse` set), it opens the valve for that long. Like a PLC program,
+// it knows only addresses.
 struct SorterSpec {
     std::string name = "Sorter";
     std::string nokInput = "%IX0.1";      // the sensor that sees NOK boxes
@@ -55,6 +56,7 @@ struct SorterSpec {
     std::string valveOutput = "%QX0.0";   // the pusher's valve
     std::string extendedInput = "%IX0.2"; // the pusher's "extended" sensor
     std::int64_t distance = 5000;         // encoder pulses from the sensor to the point where it fires
+    double pulse = 0.0;                   // s the valve stays open (an air jet), or 0: until "extended" (a pusher)
 
     bool operator==(const SorterSpec&) const = default;
 };
@@ -110,6 +112,7 @@ private:
         SorterSpec spec;
         bool lastNok = false;
         bool valve = false;
+        double closeAt = 0.0;                   // a jet's pulse ends at this scan
         std::deque<std::uint32_t> firingCounts; // where each tracked box should be pushed
         std::size_t fired = 0;
     };
