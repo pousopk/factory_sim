@@ -208,6 +208,12 @@ Scene driveDemo(std::string program);
 // measuring heights from above, and a light curtain.
 Scene sensorsDemo();
 
+// Products that aren't boxes: frozen fish, bottles, bags, balls, angle
+// brackets and a U-channel read from examples/u_channel.stl, past a
+// photocell, a laser, a line-scan camera and a light curtain, which all see
+// their real outlines.
+Scene shapesDemo();
+
 // New sensors on `conveyor`, named and wired to the next free addresses.
 // Each returns its index.
 std::size_t addProximity(Scene& scene, std::size_t conveyor);
@@ -238,8 +244,9 @@ tl::expected<void, std::string> saveScene(const Scene& scene, const std::filesys
 tl::expected<Scene, std::string> loadScene(const std::filesystem::path& path);
 
 // The scene is being saved in folder `to` instead of `from`: paths in it that
-// are relative to its folder (the soft_plc program) are rewritten to point
-// at the same files from there. Relative still if they can be, absolute if
+// are relative to its folder (the soft_plc program, STL parts, which are
+// looked for where findShapeFile looks) are rewritten to point at the same
+// files from there. Relative still if they can be, absolute if
 // not (another drive, say); absolute ones are left alone.
 void moveScene(Scene& scene, const std::filesystem::path& from, const std::filesystem::path& to);
 

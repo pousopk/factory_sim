@@ -1,9 +1,20 @@
 #include "edit/file_browser.hpp"
 #include <algorithm>
+#include <cctype>
 
 namespace fsim {
 
-FileBrowser::FileBrowser(std::filesystem::path folder) {
+namespace {
+
+std::string lower(std::string text) {
+    std::transform(text.begin(), text.end(), text.begin(), [](unsigned char c) { return std::tolower(c); });
+    return text;
+}
+
+} // namespace
+
+FileBrowser::FileBrowser(std::filesystem::path folder, std::string extension)
+    : extension_(lower(std::move(extension))) {
     go(std::move(folder));
 }
 
@@ -40,7 +51,7 @@ void FileBrowser::refresh() {
         std::error_code ignored;
         if (it->is_directory(ignored)) {
             entries_.push_back(Entry{name, true});
-        } else if (it->path().extension() == ".json") {
+        } else if (lower(it->path().extension().string()) == extension_) { // "part.STL" too
             entries_.push_back(Entry{name, false});
         }
     }
@@ -58,7 +69,7 @@ std::optional<std::filesystem::path> FileBrowser::fileFor(std::string_view name)
     }
     std::filesystem::path file = folder_ / std::filesystem::path(name);
     if (!file.has_extension()) {
-        file += ".json";
+        file += extension_;
     }
     return file;
 }

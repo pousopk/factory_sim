@@ -463,8 +463,7 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
         }
     }
     for (const auto& item : world.items()) {
-        DrawBox box{item.position, item.rotation, item.size, item.color};
-        box.round = item.shape == Shape::Tin;
+        auto box = itemBox(item);
         box.pick = Pick{Pick::Kind::Item, static_cast<std::size_t>(item.id)};
         box.highlight = selected == box.pick;
         box.hovered = hovered == box.pick;
@@ -474,15 +473,8 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
         if (!camera.shots.empty()) {
             const auto& shot = camera.shots.front();
             if (shot.taken && shot.item != 0 && world.time() - shot.exposure < ghostSeconds) {
-                DrawBox ghost{shot.itemCenter,
-                              shot.itemRotation,
-                              shot.itemSize + glm::vec3(0.002F),
-                              {0.6F, 0.8F, 1.0F},
-                              0.0F,
-                              0.0F,
-                              0.30F};
-                ghost.round = shot.itemShape == Shape::Tin;
-                boxes.push_back(ghost);
+                boxes.push_back(ghostBox(shot.itemCenter, shot.itemRotation, shot.itemSize, shot.itemShape,
+                                         shot.itemGeometry, {0.6F, 0.8F, 1.0F}, 0.30F));
             }
         }
     }
@@ -490,19 +482,27 @@ std::vector<DrawBox> sceneBoxes(const World& world, double ghostSeconds, std::op
         if (!photocell.triggers.empty()) {
             const auto& trigger = photocell.triggers.front();
             if (world.time() - trigger.outputTime < ghostSeconds && trigger.itemSize != glm::vec3(0.0F)) {
-                DrawBox ghost{trigger.itemCenter,
-                              trigger.itemRotation,
-                              trigger.itemSize + glm::vec3(0.002F),
-                              {1.0F, 1.0F, 1.0F},
-                              0.0F,
-                              0.0F,
-                              0.35F};
-                ghost.round = trigger.itemShape == Shape::Tin;
-                boxes.push_back(ghost);
+                boxes.push_back(ghostBox(trigger.itemCenter, trigger.itemRotation, trigger.itemSize, trigger.itemShape,
+                                         trigger.itemGeometry, {1.0F, 1.0F, 1.0F}, 0.35F));
             }
         }
     }
     return boxes;
+}
+
+DrawBox itemBox(const ItemView& item) {
+    DrawBox box{item.position, item.rotation, item.size, item.color};
+    box.round = item.shape == Shape::Tin;
+    box.mesh = item.geometry;
+    return box;
+}
+
+DrawBox ghostBox(glm::vec3 center, glm::quat rotation, glm::vec3 size, Shape shape,
+                 std::shared_ptr<const ItemGeometry> geometry, glm::vec3 color, float alpha) {
+    DrawBox ghost{center, rotation, size + glm::vec3(0.002F), color, 0.0F, 0.0F, alpha};
+    ghost.round = shape == Shape::Tin;
+    ghost.mesh = std::move(geometry);
+    return ghost;
 }
 
 CameraView cameraView(const CameraSpec& spec, const Conveyor& conveyor, int maxSize) {

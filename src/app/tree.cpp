@@ -16,6 +16,29 @@ namespace {
 
 const ImVec4 kOn{1.0F, 0.85F, 0.1F, 1.0F};
 
+// An item of this shape, in words.
+const char* oneOf(Shape shape) {
+    switch (shape) {
+    case Shape::Box:
+        return "a box";
+    case Shape::Tin:
+        return "a tin";
+    case Shape::Bottle:
+        return "a bottle";
+    case Shape::Bag:
+        return "a bag of crisps";
+    case Shape::Ball:
+        return "a ball";
+    case Shape::Bracket:
+        return "an angle bracket";
+    case Shape::Fish:
+        return "a frozen fish";
+    case Shape::Stl:
+        return "an STL part";
+    }
+    return "an item";
+}
+
 bool contains(const std::string& text, const std::string& filter) {
     if (filter.empty()) {
         return true;
@@ -146,7 +169,7 @@ std::string App::describe(Pick pick) const {
         if (pick.index < s.spawners.size()) {
             const auto& sp = s.spawners[pick.index];
             return fmt::format("spawner on {} at {:.2f} m: {} every {:.2f} s{}", on(sp.conveyor), sp.offset,
-                               sp.shape == Shape::Tin ? "a tin" : "a box", sp.interval,
+                               sp.shape == Shape::Stl ? sp.stl.file.c_str() : oneOf(sp.shape), sp.interval,
                                sp.nokFraction > 0.0F ? fmt::format(", {:.0f} % bad", sp.nokFraction * 100.0F) : "");
         }
         break;
@@ -183,10 +206,9 @@ std::string App::describe(Pick pick) const {
     case Pick::Kind::Item:
         for (const auto& item : w.items()) {
             if (item.id == pick.index) {
-                return fmt::format("item {}: {} {:.0f} x {:.0f} x {:.0f} mm{}, {:.2f} m/s", item.id,
-                                   item.shape == Shape::Tin ? "tin" : "box", item.size.x * 1000.0F,
-                                   item.size.y * 1000.0F, item.size.z * 1000.0F, item.nok ? ", bad (NOK)" : "",
-                                   glm::length(item.velocity));
+                return fmt::format("item {}: {} {:.0f} x {:.0f} x {:.0f} mm{}, {:.2f} m/s", item.id, oneOf(item.shape),
+                                   item.size.x * 1000.0F, item.size.y * 1000.0F, item.size.z * 1000.0F,
+                                   item.nok ? ", bad (NOK)" : "", glm::length(item.velocity));
             }
         }
         break;
@@ -217,7 +239,8 @@ void App::drawLineTree() {
         add(Pick::Kind::Spawner, s.spawners, [&](const SpawnerSpec& sp, std::size_t, Row& r) {
             r.name = "spawner";
             r.what = fmt::format("{:.2f} m", sp.offset);
-            r.detail = fmt::format("every {:.2f} s", sp.interval);
+            r.detail = fmt::format("{}, every {:.2f} s", sp.shape == Shape::Stl ? sp.stl.file : shapeName(sp.shape),
+                                   sp.interval);
         });
         add(Pick::Kind::Photocell, s.photocells, [&](const PhotocellSpec& p, std::size_t k, Row& r) {
             r.name = p.name;
@@ -356,13 +379,18 @@ void App::drawItemInspector(ItemId id) {
         ImGui::TextColored(kDim, "Gone.");
         return;
     }
-    ImGui::Text("Item %llu: %s", static_cast<unsigned long long>(id), item->shape == Shape::Tin ? "a tin" : "a box");
+    ImGui::Text("Item %llu: %s", static_cast<unsigned long long>(id), oneOf(item->shape));
     if (item->nok) {
         ImGui::SameLine();
         ImGui::TextColored(kProblem, " bad (NOK)");
     }
     ImGui::TextColored(kDim, "%.0f x %.0f x %.0f mm", item->size.x * 1000.0F, item->size.y * 1000.0F,
                        item->size.z * 1000.0F);
+    if (item->geometry != nullptr) {
+        const auto& g = *item->geometry;
+        ImGui::TextColored(kDim, "%.3f kg of %s, %zu convex pieces", g.mass(), propertiesOf(g.material()).name,
+                           std::max<std::size_t>(g.pieceCount(), 1));
+    }
     ImGui::TextColored(kDim, "at (%.3f, %.3f, %.3f) m, moving %.3f m/s", item->position.x, item->position.y,
                        item->position.z, glm::length(item->velocity));
     ImGui::TextColored(kDim, "Items aren't part of the scene: the spawners make them, the run moves them.");

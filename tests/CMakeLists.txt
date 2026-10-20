@@ -14,6 +14,8 @@ add_executable(factory_sim_tests
   sim/field_sensors_test.cpp
   sim/equipment_test.cpp
   sim/linescan_test.cpp
+  sim/item_shape_test.cpp
+  sim/shapes_test.cpp
   render/scene_test.cpp
   render/orbit_camera_test.cpp
   edit/scene_history_test.cpp
@@ -23,6 +25,7 @@ add_executable(factory_sim_tests
   analysis/tin_study_test.cpp
 )
 target_link_libraries(factory_sim_tests PRIVATE factory_sim_view doctest::doctest fmt::fmt)
+target_compile_definitions(factory_sim_tests PRIVATE FACTORY_SIM_EXAMPLES_DIR="${CMAKE_SOURCE_DIR}/examples")
 add_test(NAME factory_sim_tests COMMAND factory_sim_tests)
 
 # The PLC link: soft_plc in lockstep, its monitoring protocol, and S7.

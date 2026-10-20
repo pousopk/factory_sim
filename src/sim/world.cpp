@@ -376,27 +376,85 @@ std::int64_t World::encoderCountAt(std::size_t conveyor, double t) const {
 
 std::size_t World::addSpawner(const SpawnerSpec& spec) {
     spawners_.push_back(spec);
-    spawnerStates_.push_back(SpawnerState{time() + spec.interval});
+    spawnerStates_.push_back(SpawnerState{time() + spec.interval, false, {}});
     return spawners_.size() - 1;
 }
 
 ItemId World::spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading, bool nok, Shape shape,
-                        glm::vec3 velocity) {
+                        glm::vec3 velocity, std::shared_ptr<const ItemGeometry> geometry) {
     if (shape == Shape::Tin) {
         size.z = size.x; // round
     }
-    JPH::BodyCreationSettings settings(makeItemShape(shape, size), JPH::RVec3(position.x, position.y, position.z),
-                                       JPH::Quat::sRotation(JPH::Vec3::sAxisY(), heading), JPH::EMotionType::Dynamic,
-                                       layers::kMoving);
-    settings.mFriction = shape == Shape::Tin ? 0.4F : 0.6F; // tinplate, cardboard
+    if (geometry == nullptr && shape != Shape::Box && shape != Shape::Tin) {
+        geometry = itemGeometry(shape, size).value_or(nullptr);
+        if (geometry == nullptr) {
+            shape = Shape::Box; // an STL part without its file: a box in its place
+        }
+    }
+    JPH::BodyCreationSettings settings(
+        geometry != nullptr ? JPH::RefConst<JPH::Shape>(geometry->physicsShape()) : makeItemShape(shape, size),
+        JPH::RVec3(position.x, position.y, position.z), JPH::Quat::sRotation(JPH::Vec3::sAxisY(), heading),
+        JPH::EMotionType::Dynamic, layers::kMoving);
+    if (geometry != nullptr) {
+        // Its own material: how it slides on the belt and bounces off things.
+        size = geometry->size();
+        const auto& material = propertiesOf(geometry->material());
+        settings.mFriction = material.friction;
+        settings.mRestitution = material.restitution;
+        // Jolt merges the contacts of a body's convex pieces when their
+        // normals agree, to solve fewer. On a curved underside made of
+        // pieces (a fish lying on the belt), the points it drops are the
+        // ones holding it up, and it sinks into the belt: so, not for these.
+        settings.mUseManifoldReduction = false;
+    } else {
+        settings.mFriction = shape == Shape::Tin ? 0.4F : 0.6F; // tinplate, cardboard
+    }
     settings.mLinearVelocity = toJolt(velocity);
     // A box resting on a belt that has stopped would fall asleep, and Jolt
     // doesn't wake sleeping bodies when the belt starts again.
     settings.mAllowSleeping = false;
     const auto body = physics_.bodies().CreateAndAddBody(settings, JPH::EActivation::Activate);
     const auto id = nextItemId_++;
-    items_.push_back(Item{id, body, size, color, -1.0, nok, shape});
+    items_.push_back(Item{id, body, size, color, -1.0, nok, shape, std::move(geometry)});
     return id;
+}
+
+glm::vec3 World::itemColor(Shape shape) const {
+    switch (shape) {
+    case Shape::Box:
+    case Shape::Stl:
+        return boxColor(nextItemId_);
+    case Shape::Tin:
+        return kTinColor;
+    case Shape::Bottle:
+        return {0.30F, 0.58F, 0.38F}; // green glass
+    case Shape::Bag:
+        return {0.95F, 0.78F, 0.22F};
+    case Shape::Ball:
+        return {0.80F, 0.90F, 0.25F};
+    case Shape::Bracket:
+        return {0.62F, 0.64F, 0.68F}; // steel
+    case Shape::Fish:
+        return {0.60F, 0.68F, 0.76F}; // silver under the ice
+    }
+    return boxColor(nextItemId_);
+}
+
+std::string World::spawnerProblem(std::size_t spawner) const {
+    return spawner < spawnerStates_.size() ? spawnerStates_[spawner].problem : std::string();
+}
+
+std::pair<float, float> World::span(const Item& item, const glm::mat3& rotation, glm::vec3 direction) {
+    if (item.geometry != nullptr) {
+        return item.geometry->span(rotation, direction);
+    }
+    const float r = reach(item.shape, rotation, item.size / 2.0F, direction);
+    return {-r, r};
+}
+
+float World::reachOf(const Item& item, const glm::mat3& rotation, glm::vec3 direction) {
+    const auto [low, high] = span(item, rotation, direction);
+    return std::max(-low, high);
 }
 
 void World::removeItem(ItemId id) {
@@ -703,19 +761,29 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
         return;
     }
     const auto& bodies = physics_.bodies();
-    // Each item once: where it is, how it's turned, its half size, its shape.
+    // Each item once: where it is, how it's turned, its half size, its
+    // shape, whether it's metal.
     struct Seen {
         glm::vec3 center;
         glm::mat3 rotation;
         glm::vec3 half;
         Shape shape;
+        const ItemGeometry* geometry; // null: a box or a tin
+        bool metal;
     };
     std::vector<Seen> seen;
     seen.reserve(items_.size());
     for (const auto& item : items_) {
-        seen.push_back(Seen{toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))),
-                            glm::mat3_cast(toGlm(bodies.GetRotation(item.body))), item.size / 2.0F, item.shape});
+        const bool metal =
+            item.geometry != nullptr ? propertiesOf(item.geometry->material()).metal : item.shape == Shape::Tin;
+        seen.push_back(Seen{toGlm(JPH::Vec3(bodies.GetPosition(item.body))),
+                            glm::mat3_cast(toGlm(bodies.GetRotation(item.body))), item.size / 2.0F, item.shape,
+                            item.geometry.get(), metal});
     }
+    // Whether an item could reach a point: within its bounding sphere.
+    const auto near = [](const Seen& item, glm::vec3 point, float margin) {
+        return glm::length(point - item.center) <= glm::length(item.half) + margin;
+    };
     const glm::vec3 up{0.0F, 1.0F, 0.0F};
 
     for (auto& proximity : proximities_) {
@@ -737,8 +805,33 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
         detector.spec.responseTime = spec.responseTime;
         std::vector<std::pair<float, float>> intervals;
         float nearest = -1.0F;
+        // The face's axis: straight down from above, or in across the belt.
+        auto face = conveyor.beltPoint(spec.along) + glm::vec3(0.0F, spec.height, 0.0F);
+        glm::vec3 axis{0.0F, -1.0F, 0.0F};
+        if (spec.mount != Mount::Above) {
+            const float side = spec.mount == Mount::Left ? 1.0F : -1.0F;
+            face += left * (side * faceSide);
+            axis = -left * side;
+        }
         for (const auto& item : seen) {
             const auto offset = item.center - origin;
+            const float range = spec.range * rangeFactor(spec, item.metal) * (detector.beam ? 1.1F : 1.0F);
+            if (item.geometry != nullptr) {
+                // Its surface on the face's axis, within reach; along the
+                // belt, it covers the face as far as it reaches.
+                if (range <= 0.0F || !near(item, face, range + 0.01F)) {
+                    continue;
+                }
+                const auto distance = item.geometry->castRay(item.center, item.rotation, face, axis, range + 0.01F);
+                if (!distance || *distance > range) {
+                    continue;
+                }
+                const float a = glm::dot(offset, along);
+                const auto [low, high] = item.geometry->span(item.rotation, along);
+                intervals.emplace_back(a + low, a + high);
+                nearest = nearest < 0.0F ? *distance : std::min(nearest, *distance);
+                continue;
+            }
             const float lateral = glm::dot(offset, left);
             const float height = item.center.y - conveyor.spec.beltHeight;
             const float reachUp = reach(item.shape, item.rotation, item.half, up);
@@ -761,7 +854,6 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
             }
             // Seen within sn for its material; once on, 10 % further (the
             // hysteresis datasheets give).
-            const float range = spec.range * rangeFactor(spec, item.shape) * (detector.beam ? 1.1F : 1.0F);
             if (!facing || distance < -0.01F || distance > range) {
                 continue;
             }
@@ -786,6 +878,17 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
         const auto spot = conveyor.beltPoint(spec.along) + leftOf(conveyor.direction()) * spec.across;
         float top = 0.0F; // above the belt
         for (const auto& item : seen) {
+            if (item.geometry != nullptr) {
+                // Its surface straight down from the laser.
+                const auto from = spot + glm::vec3(0.0F, spec.mountHeight, 0.0F);
+                if (near(item, spot, spec.mountHeight)) {
+                    if (const auto d = item.geometry->castRay(item.center, item.rotation, from, {0.0F, -1.0F, 0.0F},
+                                                              spec.mountHeight)) {
+                        top = std::max(top, spec.mountHeight - *d);
+                    }
+                }
+                continue;
+            }
             const auto local = glm::transpose(item.rotation) * (spot - item.center); // in the item's own axes
             const bool under = item.shape == Shape::Tin
                                    ? local.x * local.x + local.z * local.z <= item.half.x * item.half.x
@@ -827,8 +930,26 @@ void World::updateFieldSensors(double stepStart, double stepEnd) {
         const auto origin = conveyor.beltPoint(0.0F);
         const auto along = conveyor.direction();
         curtain.broken.assign(static_cast<std::size_t>(std::max(spec.beams, 0)), false);
+        const auto left = leftOf(along);
         for (const auto& item : seen) {
             const float a = glm::dot(item.center - origin, along);
+            if (item.geometry != nullptr) {
+                // Each beam is a ray across the belt; it's broken if it hits.
+                const auto [low, high] = item.geometry->span(item.rotation, along);
+                if (spec.along < a + low || spec.along > a + high) {
+                    continue; // not in the curtain's plane
+                }
+                const float half = conveyor.spec.width / 2.0F + 0.1F;
+                for (std::size_t b = 0; b < curtain.broken.size(); ++b) {
+                    const float beam = spec.lowest + static_cast<float>(b) * spec.pitch;
+                    const auto from = conveyor.beltPoint(spec.along) + glm::vec3(0.0F, beam, 0.0F) + left * half;
+                    if (!curtain.broken[b] &&
+                        item.geometry->castRay(item.center, item.rotation, from, -left, 2.0F * half)) {
+                        curtain.broken[b] = true;
+                    }
+                }
+                continue;
+            }
             if (std::abs(a - spec.along) > reach(item.shape, item.rotation, item.half, along)) {
                 continue; // not in the curtain's plane
             }
@@ -913,17 +1034,18 @@ void World::takeLine(Camera& camera, double time, double stepEnd) {
         glm::vec3 half;
         Shape shape;
         glm::vec3 color;
+        const ItemGeometry* geometry; // null: a box or a tin
     };
     std::vector<Near> near;
     float fastest = 0.0F;
     for (const auto& item : items_) {
-        const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
+        const auto center = toGlm(JPH::Vec3(bodies.GetPosition(item.body)));
         const auto velocity = toGlm(bodies.GetLinearVelocity(item.body));
         if (std::abs(glm::dot(center - lineMiddle, along)) > glm::length(item.size) + 0.1F) {
             continue;
         }
         near.push_back(Near{center, velocity, glm::mat3_cast(toGlm(bodies.GetRotation(item.body))), item.size / 2.0F,
-                            item.shape, item.color});
+                            item.shape, item.color, item.geometry.get()});
         fastest = std::max(fastest, std::abs(glm::dot(velocity, along)));
     }
     // Enough samples over the exposure for the smear to look smooth: about
@@ -948,6 +1070,23 @@ void World::takeLine(Camera& camera, double time, double stepEnd) {
             glm::vec3 color = belt;
             for (const auto& item : near) {
                 const auto center = item.center - item.velocity * static_cast<float>(stepEnd - t);
+                if (item.geometry != nullptr) {
+                    // Its surface straight down from 1 m above the belt.
+                    const auto flat = point - center;
+                    if (glm::length(glm::vec2(flat.x, flat.z)) > glm::length(item.half)) {
+                        continue; // too far to be under the pixel
+                    }
+                    const auto from = point + glm::vec3(0.0F, 1.0F, 0.0F);
+                    if (const auto d =
+                            item.geometry->castRay(center, item.rotation, from, {0.0F, -1.0F, 0.0F}, 1.0F + 1e-3F)) {
+                        const float height = from.y - *d;
+                        if (height > top) {
+                            top = height;
+                            color = item.color;
+                        }
+                    }
+                    continue;
+                }
                 const auto local = glm::transpose(item.rotation) * (point - center);
                 const bool under = item.shape == Shape::Tin
                                        ? local.x * local.x + local.z * local.z <= item.half.x * item.half.x
@@ -1042,7 +1181,7 @@ void World::updateCameras(double stepEnd) {
             float nearest = std::numeric_limits<float>::max();
             for (const auto& item : items_) {
                 const auto velocity = toGlm(bodies.GetLinearVelocity(item.body));
-                const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))) -
+                const auto center = toGlm(JPH::Vec3(bodies.GetPosition(item.body))) -
                                     velocity * static_cast<float>(stepEnd - shot.exposure);
                 const auto offset = center - origin;
                 if (std::abs(glm::dot(offset, side)) > conveyor.spec.width / 2.0F ||
@@ -1050,7 +1189,7 @@ void World::updateCameras(double stepEnd) {
                     continue; // not on this belt
                 }
                 const auto rotation = toGlm(bodies.GetRotation(item.body));
-                const float extent = reach(item.shape, glm::mat3_cast(rotation), item.size / 2.0F, along);
+                const float extent = reachOf(item, glm::mat3_cast(rotation), along);
                 const float a = glm::dot(offset, along) - spec.along; // from the middle of the picture
                 if (std::abs(a) - extent >= spec.fieldOfView / 2.0F || std::abs(a) >= nearest) {
                     continue; // not in the picture, or another one is nearer its middle
@@ -1064,6 +1203,7 @@ void World::updateCameras(double stepEnd) {
                 shot.itemRotation = rotation;
                 shot.itemSize = item.size;
                 shot.itemShape = item.shape;
+                shot.itemGeometry = item.geometry;
             }
             camera.shots.push_front(shot);
             if (camera.shots.size() > Camera::kShotHistory) {
@@ -1110,7 +1250,7 @@ void World::updateBins() {
         const auto inside = binInside(bin.spec, conveyors_[bin.spec.conveyor].spec);
         const auto toLocal = glm::conjugate(inside.rotation);
         for (const auto& item : items_) {
-            const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
+            const auto center = toGlm(JPH::Vec3(bodies.GetPosition(item.body)));
             const auto local = toLocal * (center - inside.center);
             const bool in = glm::all(glm::lessThanEqual(glm::abs(local), inside.size / 2.0F));
             if (in && std::find(bin.inside.begin(), bin.inside.end(), item.id) == bin.inside.end()) {
@@ -1197,16 +1337,33 @@ void World::updateSpawners() {
             continue;
         }
         const auto& conveyor = conveyors_[spec.conveyor];
-        const auto position = conveyor.beltPoint(spec.offset) + glm::vec3(0.0F, spec.size.y / 2.0F + 0.002F, 0.0F);
+        // Its items' size: from its settings, the jitter on their height
+        // drawn below; an STL part's from its file.
+        auto size = spec.size;
+        std::shared_ptr<const ItemGeometry> geometry;
+        if (spec.shape != Shape::Box && spec.shape != Shape::Tin) {
+            auto made = itemGeometry(spec.shape, size, spec.stl);
+            state.problem = made ? std::string() : made.error();
+            if (!made) {
+                state.nextSpawn = time() + spec.interval; // try again later (the file may come)
+                continue;
+            }
+            geometry = *made;
+            size = geometry->size();
+        }
+        const auto position = conveyor.beltPoint(spec.offset) + glm::vec3(0.0F, size.y / 2.0F + 0.002F, 0.0F);
         // An infeed waits for a gap: if a box is still where the new one would
         // go (the belt has stopped, or boxes are queueing back to here), it
         // waits, and the rhythm starts again from when it can put it down.
         const auto along = conveyor.direction();
         const auto& bodies = physics_.bodies();
         const bool occupied = std::any_of(items_.begin(), items_.end(), [&](const Item& item) {
-            const auto offset = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))) - position;
-            return std::abs(glm::dot(offset, along)) < (spec.size.x + item.size.x) / 2.0F + 0.01F &&
-                   std::abs(offset.y) < spec.size.y &&
+            const auto offset = toGlm(JPH::Vec3(bodies.GetPosition(item.body))) - position;
+            // In the way along the belt, across it, and in height: a short item
+            // (a fish) and a tall one (a bottle) overlap however different
+            // their middles' heights are.
+            return std::abs(glm::dot(offset, along)) < (size.x + item.size.x) / 2.0F + 0.01F &&
+                   std::abs(offset.y) < std::max(size.y, (size.y + item.size.y) / 2.0F) &&
                    std::abs(glm::dot(offset, leftOf(along))) < conveyor.spec.width / 2.0F;
         });
         if (occupied) {
@@ -1217,18 +1374,18 @@ void World::updateSpawners() {
         // same ones are bad every run.
         std::uniform_real_distribution<float> chance(0.0F, 1.0F);
         const bool nok = spec.nokFraction > 0.0F && chance(random_) < spec.nokFraction;
-        auto size = spec.size;
-        if (spec.heightJitter > 0.0F) {
+        const auto unjittered = size;
+        if (spec.heightJitter > 0.0F && spec.shape != Shape::Stl) {
             std::uniform_real_distribution<float> height(-spec.heightJitter, spec.heightJitter);
             size.y = std::max(0.01F, size.y + height(random_));
+            if (geometry != nullptr) {
+                geometry = itemGeometry(spec.shape, size).value_or(geometry);
+                size = geometry->size();
+            }
         }
-        const auto at = position + glm::vec3(0.0F, (size.y - spec.size.y) / 2.0F, 0.0F); // still resting on the belt
-        spawnItem(at, size,
-                  nok                        ? kNokColor
-                  : spec.shape == Shape::Tin ? kTinColor
-                                             : boxColor(nextItemId_),
-                  conveyor.spec.heading, nok, spec.shape,
-                  spec.atBeltSpeed ? conveyor.direction() * conveyor.speedAt(spec.offset) : glm::vec3(0.0F));
+        const auto at = position + glm::vec3(0.0F, (size.y - unjittered.y) / 2.0F, 0.0F); // still resting on the belt
+        spawnItem(at, size, nok ? kNokColor : itemColor(spec.shape), conveyor.spec.heading, nok, spec.shape,
+                  spec.atBeltSpeed ? conveyor.direction() * conveyor.speedAt(spec.offset) : glm::vec3(0.0F), geometry);
         ++spawned_;
         spawnedNok_ += nok ? 1 : 0;
 
@@ -1244,7 +1401,7 @@ void World::updateSpawners() {
 void World::removeFallenItems() {
     std::vector<ItemId> toRemove;
     for (auto& item : items_) {
-        const auto position = physics_.bodies().GetCenterOfMassPosition(item.body);
+        const auto position = physics_.bodies().GetPosition(item.body);
         const bool onFloor = position.GetY() < item.size.y; // roughly: lying on the floor
         if (!onFloor) {
             item.onFloorSince = -1.0;
@@ -1282,11 +1439,31 @@ std::vector<std::pair<float, float>> World::beamIntervals(const Conveyor& convey
         if (onlyNok && !item.nok) {
             continue; // an inspection sensor: good boxes don't trigger it
         }
-        const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body)));
+        const auto center = toGlm(JPH::Vec3(bodies.GetPosition(item.body)));
         const auto rotation = glm::mat3_cast(toGlm(bodies.GetRotation(item.body)));
         const auto half = item.size / 2.0F;
         const auto offset = center - origin;
         const float a = glm::dot(offset, along);
+        if (item.geometry != nullptr) {
+            // Its real outline: what its cross-section at the beam's height
+            // covers along the belt (nothing, if it doesn't reach that high).
+            const auto [low, high] = item.geometry->span(rotation, {0.0F, 1.0F, 0.0F});
+            if (center.y + low > beamY || center.y + high < beamY ||
+                std::abs(glm::dot(offset, side)) >= conveyor.spec.width / 2.0F + reachOf(item, rotation, side)) {
+                continue;
+            }
+            const auto first = intervals.size();
+            item.geometry->slice(center, rotation, beamY, along, intervals);
+            const float start = glm::dot(origin, along);
+            for (auto k = first; k < intervals.size(); ++k) {
+                intervals[k].first -= start;
+                intervals[k].second -= start;
+                if (owners != nullptr) {
+                    owners->push_back(i);
+                }
+            }
+            continue;
+        }
         const float vertical = reach(item.shape, rotation, half, {0.0F, 1.0F, 0.0F});
         const bool atHeight = center.y - vertical <= beamY && beamY <= center.y + vertical;
         const bool acrossBelt =
@@ -1404,15 +1581,16 @@ void World::updatePhotocells(double stepStart, double stepEnd) {
                 // Where the box was at the output time: back from where it
                 // is now, at its present velocity.
                 const auto velocity = toGlm(bodies.GetLinearVelocity(it->body));
-                const auto center = toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(it->body)));
+                const auto center = toGlm(JPH::Vec3(bodies.GetPosition(it->body)));
                 const auto rotation = toGlm(bodies.GetRotation(it->body));
                 trigger.itemCenter = center - velocity * static_cast<float>(stepEnd - edge->time);
                 trigger.itemRotation = rotation;
                 trigger.itemSize = it->size;
                 trigger.itemShape = it->shape;
+                trigger.itemGeometry = it->geometry;
                 trigger.speed = glm::dot(velocity, along);
-                const float extent = reach(it->shape, glm::mat3_cast(rotation), it->size / 2.0F, along);
-                const float front = glm::dot(trigger.itemCenter - origin, along) + extent;
+                const float front =
+                    glm::dot(trigger.itemCenter - origin, along) + span(*it, glm::mat3_cast(rotation), along).second;
                 trigger.positionError = front - spec.along;
             }
             photocell.triggers.push_front(trigger);
@@ -1428,9 +1606,9 @@ std::vector<ItemView> World::items() const {
     views.reserve(items_.size());
     const auto& bodies = physics_.bodies();
     for (const auto& item : items_) {
-        views.push_back(ItemView{item.id, toGlm(JPH::Vec3(bodies.GetCenterOfMassPosition(item.body))),
+        views.push_back(ItemView{item.id, toGlm(JPH::Vec3(bodies.GetPosition(item.body))),
                                  toGlm(bodies.GetRotation(item.body)), item.size, item.color,
-                                 toGlm(bodies.GetLinearVelocity(item.body)), item.nok, item.shape});
+                                 toGlm(bodies.GetLinearVelocity(item.body)), item.nok, item.shape, item.geometry});
     }
     return views;
 }

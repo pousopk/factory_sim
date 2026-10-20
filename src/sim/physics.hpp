@@ -14,6 +14,11 @@
 
 namespace fsim {
 
+// Jolt's process-wide setup (its allocator, the factory for its types):
+// done once, before anything of Jolt's is made. Physics does it; so does
+// anything that makes Jolt shapes on its own (item shapes).
+void initialiseJolt();
+
 // Object layers: which bodies can collide with which. Static bodies (the
 // floor, conveyor frames) never collide with each other, only with moving
 // ones (the boxes); moving bodies collide with everything.

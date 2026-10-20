@@ -83,6 +83,16 @@ TEST_CASE("The file browser lists folders first, then scene files, without hidde
     CHECK_FALSE(browser.error().empty()); // shown in the dialog, not thrown
 }
 
+TEST_CASE("The file browser can list STL parts instead, in any case") {
+    TemporaryFolder folder;
+    folder.touch("bracket.STL");
+    folder.touch("fish.stl");
+    folder.touch("line.json");
+    FileBrowser browser(folder.path, ".stl");
+    CHECK(browser.entries() == std::vector<FileBrowser::Entry>{{"bracket.STL", false}, {"fish.stl", false}});
+    CHECK(browser.fileFor("hook") == folder.path / "hook.stl");
+}
+
 TEST_CASE("A typed name is a .json file in the browser's folder") {
     TemporaryFolder folder;
     FileBrowser browser(folder.path);
@@ -91,6 +101,26 @@ TEST_CASE("A typed name is a .json file in the browser's folder") {
     CHECK_FALSE(browser.fileFor("").has_value());
     CHECK_FALSE(browser.fileFor("sub/line").has_value());
     CHECK_FALSE(browser.fileFor("..").has_value());
+}
+
+TEST_CASE("A scene saved in another folder still finds its STL parts") {
+    TemporaryFolder lines;
+    TemporaryFolder other;
+    lines.touch("hook.stl");
+    setShapeFolders({lines.path});
+    Scene scene = defaultScene();
+    SpawnerSpec spawner;
+    spawner.shape = Shape::Stl;
+    spawner.stl.file = "hook.stl";
+    scene.spawners.push_back(spawner);
+    spawner.stl.file = "missing.stl";
+    scene.spawners.push_back(spawner);
+    moveScene(scene, lines.path, other.path);
+    CHECK(
+        std::filesystem::absolute(other.path / scene.spawners[scene.spawners.size() - 2].stl.file).lexically_normal() ==
+        std::filesystem::absolute(lines.path / "hook.stl").lexically_normal());
+    CHECK(scene.spawners.back().stl.file == "missing.stl"); // not found: left as it was
+    setShapeFolders({});
 }
 
 TEST_CASE("A scene saved in another folder still finds its soft_plc program") {

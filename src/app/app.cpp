@@ -62,6 +62,8 @@ App::App(std::optional<std::filesystem::path> scenePath)
 void App::rebuildWorld() {
     world_.reset();
     programError_.clear();
+    // STL files named without a folder: next to the scene, or in the examples.
+    setShapeFolders({sceneFolder(), FACTORY_SIM_EXAMPLES_DIR});
     world_ = buildWorld(scene(), [this](const Scene& s) {
         auto made = makeAnyProgram(s, sceneFolder());
         programError_ = made.error;
@@ -689,44 +691,144 @@ void App::drawSpawnerInspector(std::size_t index) {
     auto& s = scene();
     auto& spawner = s.spawners[index];
     conveyorCombo("on conveyor", spawner.conveyor, s);
-    ImGui::Checkbox("spawn boxes", &spawner.enabled);
-    scaledSlider("bad boxes", spawner.nokFraction, 100.0F, 0.0F, 100.0F, "%.0f %%");
-    ImGui::SetItemTooltip("The share of boxes that are bad (NOK, red), chosen at random");
-    scaledSlider("every", spawner.interval, 1.0, 0.2F, 5.0F, "%.2f s");
+    ImGui::Checkbox("spawn items", &spawner.enabled);
+    scaledSlider("bad ones", spawner.nokFraction, 100.0F, 0.0F, 100.0F, "%.0f %%");
+    ImGui::SetItemTooltip("The share of items that are bad (NOK, red), chosen at random");
+    scaledSlider("every", spawner.interval, 1.0, 0.2F, 8.0F, "%.2f s");
     scaledSlider("jitter", spawner.intervalJitter, 1.0, 0.0F, 1.0F, "± %.2f s");
-    int shape = spawner.shape == Shape::Tin ? 1 : 0;
-    ImGui::SetNextItemWidth(fieldWidth());
-    if (ImGui::Combo("makes", &shape, "boxes\0tins\0")) {
-        spawner.shape = shape == 1 ? Shape::Tin : Shape::Box;
-    }
+    drawShapeSettings(spawner);
     ImGui::Checkbox("arriving at belt speed", &spawner.atBeltSpeed);
     ImGui::SetItemTooltip("As from an infeed conveyor. Off: put down standing still, so the belt has to\n"
                           "speed them up first, and the spawner waits until there's room.");
-    ImGui::SetNextItemWidth(fieldWidth());
-    if (spawner.shape == Shape::Tin) {
-        float size[2] = {spawner.size.x, spawner.size.y};
-        if (ImGui::SliderFloat2("size", size, 0.02F, 0.35F, "%.3f m")) {
-            spawner.size = {size[0], size[1], size[0]};
-        }
-        ImGui::SetItemTooltip("Diameter, height");
-    } else {
-        ImGui::SliderFloat3("size", &spawner.size.x, 0.02F, 0.35F, "%.2f m");
-        ImGui::SetItemTooltip("Length along the belt, height, width");
-    }
     const float length = spawner.conveyor < s.conveyors.size() ? s.conveyors[spawner.conveyor].spec.length : 1.0F;
     ImGui::SetNextItemWidth(fieldWidth());
     ImGui::SliderFloat("where", &spawner.offset, 0.0F, length, "%.2f m from the start");
+    const auto geometry = itemGeometry(spawner.shape, spawner.size, spawner.stl);
+    const auto size = geometry && *geometry != nullptr ? (*geometry)->size() : spawner.size;
     if (spawner.conveyor < s.conveyors.size()) {
         const float speed = s.conveyors[spawner.conveyor].spec.targetSpeed;
         ImGui::TextColored(kDim, "gap between them at full speed: %.3f m",
-                           speed * static_cast<float>(spawner.interval) - spawner.size.x);
+                           speed * static_cast<float>(spawner.interval) - size.x);
     }
+    ImGui::BeginDisabled(!geometry);
     if (ImGui::Button("Spawn one now") && spawner.conveyor < world_->conveyors().size()) {
         const auto& c = world_->conveyors()[spawner.conveyor];
-        world_->spawnItem(c.beltPoint(spawner.offset) + glm::vec3(0.0F, spawner.size.y / 2.0F + 0.002F, 0.0F),
-                          spawner.size, {0.85F, 0.30F, 0.30F}, c.spec.heading, false, spawner.shape,
-                          spawner.atBeltSpeed ? c.direction() * c.speed : glm::vec3(0.0F));
+        world_->spawnItem(c.beltPoint(spawner.offset) + glm::vec3(0.0F, size.y / 2.0F + 0.002F, 0.0F), size,
+                          world_->itemColor(spawner.shape), c.spec.heading, false, spawner.shape,
+                          spawner.atBeltSpeed ? c.direction() * c.speed : glm::vec3(0.0F), geometry.value_or(nullptr));
     }
+    ImGui::EndDisabled();
+}
+
+// What a spawner makes: its shape and size, or its STL file, and what
+// that comes to (its weight, its material, the physics' pieces).
+void App::drawShapeSettings(SpawnerSpec& spawner) {
+    static const char* const names[] = {"boxes", "tins",           "bottles",     "bags of crisps",
+                                        "balls", "angle brackets", "frozen fish", "a part from an STL file"};
+    int shape = static_cast<int>(spawner.shape);
+    ImGui::SetNextItemWidth(fieldWidth());
+    if (ImGui::Combo("makes", &shape, names, IM_ARRAYSIZE(names))) {
+        spawner.shape = static_cast<Shape>(shape);
+        if (spawner.shape != Shape::Stl) {
+            spawner.size = typicalSize(spawner.shape);
+        }
+    }
+    ImGui::SetNextItemWidth(fieldWidth());
+    switch (spawner.shape) {
+    case Shape::Tin:
+    case Shape::Bottle: {
+        float size[2] = {spawner.size.x, spawner.size.y};
+        if (ImGui::SliderFloat2("size", size, 0.02F, 0.4F, "%.3f m")) {
+            spawner.size = {size[0], size[1], size[0]};
+        }
+        ImGui::SetItemTooltip("Diameter, height");
+        break;
+    }
+    case Shape::Ball:
+        if (ImGui::SliderFloat("diameter", &spawner.size.x, 0.02F, 0.3F, "%.3f m")) {
+            spawner.size = glm::vec3(spawner.size.x);
+        }
+        break;
+    case Shape::Stl:
+        drawStlSettings(spawner);
+        break;
+    default:
+        ImGui::SliderFloat3("size", &spawner.size.x, 0.02F, 0.6F, "%.3f m");
+        ImGui::SetItemTooltip(spawner.shape == Shape::Fish ? "Length, thickness (lying on its side), depth"
+                                                           : "Length along the belt, height, width");
+        break;
+    }
+    if (spawner.shape != Shape::Stl) {
+        scaledSlider("height jitter", spawner.heightJitter, 1000.0F, 0.0F, 50.0F, "± %.0f mm");
+        ImGui::SetItemTooltip("Each item's height varies at random by up to this much");
+    }
+    const auto geometry = itemGeometry(spawner.shape, spawner.size, spawner.stl);
+    if (!geometry) {
+        ImGui::TextColored(kProblem, "%s", geometry.error().c_str());
+        return;
+    }
+    if (*geometry == nullptr) {
+        ImGui::TextColored(kDim, "%s", spawner.shape == Shape::Tin ? "tinplate" : "cardboard");
+        return;
+    }
+    const auto& g = **geometry;
+    const auto& material = propertiesOf(g.material());
+    ImGui::TextColored(kDim, "%.3f kg of %s, %.0f x %.0f x %.0f mm", g.mass(), material.name, g.size().x * 1000.0F,
+                       g.size().y * 1000.0F, g.size().z * 1000.0F);
+    ImGui::SetItemTooltip("Friction %.2f, bounce %.2f, %.0f kg/m³%s\n"
+                          "Its centre of mass is %.0f mm %s of its middle.",
+                          material.friction, material.restitution, material.density, material.metal ? ", metal" : "",
+                          std::abs(g.centerOfMass().x) * 1000.0F, g.centerOfMass().x >= 0.0F ? "ahead" : "behind");
+    ImGui::TextColored(kDim, "%zu convex piece%s for the physics, %zu triangles drawn",
+                       std::max<std::size_t>(g.pieceCount(), 1), g.pieceCount() == 1 ? "" : "s",
+                       g.surface().positions.size() / 3);
+}
+
+void App::drawStlSettings(SpawnerSpec& spawner) {
+    auto& stl = spawner.stl;
+    ImGui::SetNextItemWidth(fieldWidth() - ImGui::GetFontSize() * 4.5F);
+    ImGui::InputText("##file", &stl.file);
+    ImGui::SameLine();
+    if (ImGui::Button("Choose...")) {
+        dialog_ = Dialog::Stl;
+        dialogSpawner_ = static_cast<std::size_t>(&spawner - scene().spawners.data());
+        const auto found = findShapeFile(stl.file);
+        browser_.emplace(found.empty() ? sceneFolder() : found.parent_path(), ".stl");
+        dialogName_ = found.empty() ? std::string() : found.filename().string();
+        dialogError_.clear();
+    }
+    ImGui::SameLine();
+    ImGui::TextUnformatted("file");
+    ImGui::SetItemTooltip("Looked for next to the scene, then in the examples folder, unless it's a full path");
+    // STL files have no unit: the one it was drawn in.
+    const std::pair<const char*, float> units[] = {{"mm", 0.001F}, {"cm", 0.01F}, {"inch", 0.0254F}, {"m", 1.0F}};
+    int unit = 0;
+    for (int i = 0; i < 4; ++i) {
+        if (std::abs(units[i].second - stl.unit) < 1e-6F) {
+            unit = i;
+        }
+    }
+    ImGui::SetNextItemWidth(fieldWidth());
+    if (ImGui::Combo("drawn in", &unit, "mm\0cm\0inch\0m\0")) {
+        stl.unit = units[unit].second;
+    }
+    ImGui::SameLine();
+    ImGui::Checkbox("z up", &stl.zUp);
+    ImGui::SetItemTooltip("Most CAD programs have z up; here y is. Its x runs along the belt.");
+    ImGui::SetNextItemWidth(fieldWidth());
+    if (ImGui::BeginCombo("made of", propertiesOf(stl.material).name)) {
+        for (const auto m : kMaterials) {
+            if (ImGui::Selectable(propertiesOf(m).name, m == stl.material)) {
+                stl.material = m;
+            }
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::SetNextItemWidth(fieldWidth());
+    ImGui::SliderInt("pieces", &stl.pieces, 1, 32, "up to %d");
+    ImGui::SetItemTooltip("How many convex pieces the physics may split it into (with V-HACD).\n"
+                          "1: its convex hull, which fills any hollow; more follow its shape better\n"
+                          "and cost more to simulate.");
 }
 
 // The last triggers of the selected photocell (or the first one): when the
@@ -971,7 +1073,7 @@ void App::drawControl() {
     }
     ImGui::SetItemTooltip("What drives the valves and motors, scan by scan (every 10 ms), through the I/O:\n"
                           "soft_plc runs an ST program in step with the simulation; an S7 PLC runs on its own.");
-    ImGui::TextColored(kDim, "%zu boxes made, %zu bad", world_->spawned(), world_->spawnedNok());
+    ImGui::TextColored(kDim, "%zu items made, %zu bad", world_->spawned(), world_->spawnedNok());
     ImGui::TextColored(kDim, "Demos: File > New from a demo");
     if (!programError_.empty()) {
         ImGui::PushTextWrapPos(0.0F);

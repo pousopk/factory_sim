@@ -62,9 +62,12 @@ struct SpawnerSpec {
     glm::vec3 size{0.2F, 0.15F, 0.2F}; // length (along the belt), height, width
     float offset = 0.2F;               // where boxes appear, metres from the belt's start
     bool enabled = true;
-    float nokFraction = 0.0F;  // the share of boxes that are bad (NOK), at random: 0.25 = one in four
-    Shape shape = Shape::Box;  // a tin: size is diameter, height, diameter
-    float heightJitter = 0.0F; // ± m at random on each item's height
+    float nokFraction = 0.0F; // the share of boxes that are bad (NOK), at random: 0.25 = one in four
+    // What it makes. Size is the items' bounding box (a tin's: diameter,
+    // height, diameter); an STL part's size comes from its file.
+    Shape shape = Shape::Box;
+    StlSpec stl;               // the file, for Shape::Stl
+    float heightJitter = 0.0F; // ± m at random on each item's height (not an STL part's)
     // Items arrive already moving with the belt, as from an infeed conveyor,
     // instead of being put down on it standing still.
     bool atBeltSpeed = false;
@@ -82,6 +85,7 @@ struct ItemView {
     glm::vec3 velocity;
     bool nok = false; // a bad box, to be sorted out
     Shape shape = Shape::Box;
+    std::shared_ptr<const ItemGeometry> geometry{}; // its shape, if not a box or a tin
 };
 
 // The simulated factory: conveyors, boxes on them, and time.
@@ -141,8 +145,14 @@ public:
     void setStrokes(const std::vector<PusherSpec>& pushers, const std::vector<DiverterSpec>& diverters,
                     const std::vector<StopperSpec>& stoppers);
 
+    // An item at `position` (the middle of its bounding box). A shape other
+    // than a box or a tin brings its `geometry` (made for `size` if it's
+    // missing), which also decides its size.
     ItemId spawnItem(glm::vec3 position, glm::vec3 size, glm::vec3 color, float heading = 0.0F, bool nok = false,
-                     Shape shape = Shape::Box, glm::vec3 velocity = glm::vec3(0.0F));
+                     Shape shape = Shape::Box, glm::vec3 velocity = glm::vec3(0.0F),
+                     std::shared_ptr<const ItemGeometry> geometry = nullptr);
+    // The colour items of a shape get (a box's depends on the box).
+    glm::vec3 itemColor(Shape shape) const;
     void removeItem(ItemId id);
     void clearItems(); // removes every item
 
@@ -168,6 +178,8 @@ public:
     const std::vector<Conveyor>& conveyors() const { return conveyors_; }
     std::vector<SpawnerSpec>& spawners() { return spawners_; }
     const std::vector<SpawnerSpec>& spawners() const { return spawners_; }
+    // Why a spawner can't make its items (its STL file is missing...), or empty.
+    std::string spawnerProblem(std::size_t spawner) const;
     std::vector<Photocell>& photocells() { return photocells_; }
     const std::vector<Photocell>& photocells() const { return photocells_; }
     std::vector<Pusher>& pushers() { return pushers_; }
@@ -246,10 +258,12 @@ private:
         double onFloorSince = -1.0; // when it came to rest on the floor, or -1
         bool nok = false;
         Shape shape = Shape::Box;
+        std::shared_ptr<const ItemGeometry> geometry{}; // null for a box or a tin
     };
     struct SpawnerState {
         double nextSpawn = 0.0;
         bool waiting = false; // its spot was taken when a box was due
+        std::string problem;  // why it can't make its items, or empty
     };
 
     class ConveyorContacts;
@@ -274,6 +288,10 @@ private:
     static void recordSetpoint(Conveyor& conveyor, double time);
     void cameraTrigger(Camera& camera, double time);
     void scan(double time);
+    // How far an item turned by `rotation` reaches from its centre along
+    // `direction`: the lowest and the highest, and the larger of the two.
+    static std::pair<float, float> span(const Item& item, const glm::mat3& rotation, glm::vec3 direction);
+    static float reachOf(const Item& item, const glm::mat3& rotation, glm::vec3 direction);
     JPH::BodyID addKinematic(const Pose& pose, float friction);
     JPH::BodyID addStatic(const Pose& pose, float friction);
 

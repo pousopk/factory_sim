@@ -85,8 +85,7 @@ void App::startNew(Scene scene) {
     // The untitled scene exists only in the scratch file: replacing one that
     // was edited would lose it, so that asks first. From the start page, the
     // one left in the scratch file counts.
-    const bool atRisk =
-        startPage_ ? untitledLeft_ : scenePath_.empty() && history_.canUndo();
+    const bool atRisk = startPage_ ? untitledLeft_ : scenePath_.empty() && history_.canUndo();
     if (atRisk) {
         pendingNew_ = std::move(scene);
         return;
@@ -291,8 +290,9 @@ void App::drawFileDialog() {
     if (dialog_ == Dialog::None || !browser_) {
         return;
     }
-    const bool opening = dialog_ == Dialog::Open;
-    const char* title = opening ? "Open a scene" : "Save the scene as";
+    const bool part = dialog_ == Dialog::Stl;
+    const bool opening = dialog_ == Dialog::Open || part;
+    const char* title = part ? "Choose an STL file" : opening ? "Open a scene" : "Save the scene as";
     ImGui::OpenPopup(title);
     ImGui::SetNextWindowSize(ImVec2(560, 420), ImGuiCond_Appearing);
     bool open = true;
@@ -332,7 +332,7 @@ void App::drawFileDialog() {
         }
     }
     if (browser.entries().empty() && browser.error().empty()) {
-        ImGui::TextColored(kDim, "No folders or scene files here.");
+        ImGui::TextColored(kDim, part ? "No folders or STL files here." : "No folders or scene files here.");
     }
     ImGui::EndChild();
     if (enter) {
@@ -340,14 +340,14 @@ void App::drawFileDialog() {
     }
 
     ImGui::SetNextItemWidth(-160.0F);
-    const bool typedEnter =
-        ImGui::InputTextWithHint("##name", "name.json", &dialogName_, ImGuiInputTextFlags_EnterReturnsTrue);
+    const bool typedEnter = ImGui::InputTextWithHint("##name", part ? "part.stl" : "name.json", &dialogName_,
+                                                     ImGuiInputTextFlags_EnterReturnsTrue);
     const auto file = browser.fileFor(dialogName_);
     std::error_code ignored;
     const bool exists = file && std::filesystem::exists(*file, ignored);
     ImGui::SameLine();
     ImGui::BeginDisabled(!file || (opening && !exists));
-    const char* action = opening ? "Open" : exists ? "Replace" : "Save";
+    const char* action = part ? "Choose" : opening ? "Open" : exists ? "Replace" : "Save";
     if (ImGui::Button(action) || (typedEnter && file && (!opening || exists))) {
         chosen = file;
     }
@@ -364,7 +364,16 @@ void App::drawFileDialog() {
         ImGui::TextColored(kProblem, "%s", dialogError_.c_str());
     }
 
-    if (chosen) {
+    if (chosen && part) {
+        // Named from the scene's folder if it's under it, else in full.
+        const auto picked = std::filesystem::absolute(*chosen).lexically_normal();
+        const auto relative = picked.lexically_relative(sceneFolder());
+        const bool under = !relative.empty() && *relative.begin() != "..";
+        if (dialogSpawner_ < scene().spawners.size()) {
+            scene().spawners[dialogSpawner_].stl.file = under ? relative.string() : picked.string();
+        }
+        open = false;
+    } else if (chosen) {
         if (opening) {
             open = !openScene(*chosen); // a file that can't be read leaves the dialog open, with the reason
         } else {

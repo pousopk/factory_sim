@@ -46,8 +46,8 @@ struct ProximitySpec {
     bool operator==(const ProximitySpec&) const = default;
 };
 
-// How far a proximity switch sees an item of this material, as a share of sn.
-float rangeFactor(const ProximitySpec& spec, Shape shape);
+// How far a proximity switch sees an item, metal or not, as a share of sn.
+float rangeFactor(const ProximitySpec& spec, bool metal);
 
 struct Proximity {
     ProximitySpec spec;

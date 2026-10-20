@@ -5,8 +5,7 @@
 
 namespace fsim {
 
-float rangeFactor(const ProximitySpec& spec, Shape shape) {
-    const bool metal = shape == Shape::Tin;
+float rangeFactor(const ProximitySpec& spec, bool metal) {
     if (metal) {
         return 1.0F;
     }

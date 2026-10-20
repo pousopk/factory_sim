@@ -97,6 +97,7 @@ struct Shot {
     glm::quat itemRotation{1.0F, 0.0F, 0.0F, 0.0F};
     glm::vec3 itemSize{0.0F};
     Shape itemShape = Shape::Box;
+    std::shared_ptr<const ItemGeometry> itemGeometry{}; // its shape, if not a box or a tin
 };
 
 // A line-scan camera's image so far: the most recent lines, oldest first,

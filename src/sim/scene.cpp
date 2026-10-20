@@ -970,6 +970,61 @@ Scene sensorsDemo() {
     return scene;
 }
 
+Scene shapesDemo() {
+    Scene scene;
+    PlacedConveyor conveyor;
+    conveyor.spec.name = "C1";
+    conveyor.spec.length = 5.0F;
+    conveyor.spec.targetSpeed = 0.4F;
+    conveyor.spec.encoderInput = "%ID8";
+    conveyor.spec.guideLeft = true;
+    conveyor.spec.guideRight = true;
+    scene.conveyors.push_back(conveyor);
+    // One spawner per product, each on its own rhythm; a spawner waits for
+    // room, so they take turns.
+    const std::pair<Shape, double> products[] = {{Shape::Fish, 2.1}, {Shape::Bottle, 2.9},  {Shape::Bag, 3.7},
+                                                 {Shape::Ball, 4.3}, {Shape::Bracket, 5.3}, {Shape::Stl, 6.1}};
+    for (const auto& [shape, interval] : products) {
+        SpawnerSpec spawner;
+        spawner.shape = shape;
+        spawner.size = typicalSize(shape);
+        spawner.interval = interval;
+        spawner.offset = 0.3F;
+        spawner.atBeltSpeed = true;
+        if (shape == Shape::Stl) {
+            spawner.stl.file = "u_channel.stl"; // found in the examples folder
+        }
+        scene.spawners.push_back(spawner);
+    }
+    // A photocell low over the belt: a fish blocks it with its thick middle
+    // only, a bottle lying down with its body but not its neck.
+    PhotocellSpec photocell;
+    photocell.name = "B1";
+    photocell.along = 1.4F;
+    photocell.height = 0.02F;
+    photocell.input = "%IX0.0";
+    scene.photocells.push_back(photocell);
+    const auto laser = addLaser(scene, 0);
+    scene.lasers[laser].along = 2.0F;
+    scene.lasers[laser].mountHeight = 0.5F;
+    scene.lasers[laser].rangeMin = 0.25F;
+    scene.lasers[laser].rangeMax = 0.5F;
+    // A line-scan camera on the encoder: the products' outlines from above.
+    const auto camera = addCamera(scene, 0);
+    auto& line = scene.cameras[camera];
+    line.name = "K1";
+    line.kind = CameraKind::Line;
+    line.along = 2.7F;
+    line.lineWidth = 0.42F;
+    line.pixelsAcross = 384;
+    line.lineTrigger = LineTrigger::Encoder;
+    line.pulsesPerLine = 7; // 6519 pulses/m: 1.07 mm per line, 1.09 mm per pixel
+    line.exposure = 0.0001;
+    const auto curtain = addLightCurtain(scene, 0);
+    scene.curtains[curtain].along = 3.4F;
+    return scene;
+}
+
 std::size_t addProximity(Scene& scene, std::size_t conveyor) {
     ProximitySpec p;
     p.name = freeName(scene.proximities, "BP", [](const ProximitySpec& s) { return s.name; });
@@ -1231,16 +1286,19 @@ std::string sceneToJson(const Scene& scene) {
                                       {"onlyNok", p.onlyNok}});
     }
     for (const auto& s : scene.spawners) {
-        data["spawners"].push_back({{"conveyor", s.conveyor},
-                                    {"interval", s.interval},
-                                    {"intervalJitter", s.intervalJitter},
-                                    {"size", vec3(s.size)},
-                                    {"offset", s.offset},
-                                    {"enabled", s.enabled},
-                                    {"nokFraction", s.nokFraction},
-                                    {"shape", s.shape == Shape::Tin ? "tin" : "box"},
-                                    {"heightJitter", s.heightJitter},
-                                    {"atBeltSpeed", s.atBeltSpeed}});
+        json entry = {
+            {"conveyor", s.conveyor},       {"interval", s.interval},      {"intervalJitter", s.intervalJitter},
+            {"size", vec3(s.size)},         {"offset", s.offset},          {"enabled", s.enabled},
+            {"nokFraction", s.nokFraction}, {"shape", shapeName(s.shape)}, {"heightJitter", s.heightJitter},
+            {"atBeltSpeed", s.atBeltSpeed}};
+        if (s.shape == Shape::Stl) {
+            entry["stl"] = {{"file", s.stl.file},
+                            {"unit", s.stl.unit},
+                            {"material", propertiesOf(s.stl.material).name},
+                            {"pieces", s.stl.pieces},
+                            {"zUp", s.stl.zUp}};
+        }
+        data["spawners"].push_back(entry);
     }
     for (const auto& p : scene.pushers) {
         json entry = {{"name", p.name},           {"conveyor", p.conveyor},         {"along", p.along},
@@ -1482,7 +1540,20 @@ tl::expected<Scene, std::string> sceneFromJson(std::string_view text) {
             spawner.offset = s.value("offset", spawner.offset);
             spawner.enabled = s.value("enabled", spawner.enabled);
             spawner.nokFraction = s.value("nokFraction", spawner.nokFraction);
-            spawner.shape = s.value("shape", std::string("box")) == "tin" ? Shape::Tin : Shape::Box;
+            const auto shape = s.value("shape", std::string("box"));
+            if (const auto known = shapeNamed(shape)) {
+                spawner.shape = *known;
+            } else {
+                return tl::unexpected(fmt::format("a spawner makes \"{}\", which isn't a shape", shape));
+            }
+            if (const auto& stl = s.value("stl", json::object()); !stl.empty()) {
+                spawner.stl.file = stl.value("file", std::string());
+                spawner.stl.unit = stl.value("unit", spawner.stl.unit);
+                spawner.stl.material =
+                    materialNamed(stl.value("material", std::string())).value_or(spawner.stl.material);
+                spawner.stl.pieces = stl.value("pieces", spawner.stl.pieces);
+                spawner.stl.zUp = stl.value("zUp", spawner.stl.zUp);
+            }
             spawner.heightJitter = s.value("heightJitter", 0.0F);
             spawner.atBeltSpeed = s.value("atBeltSpeed", false);
             if (auto ok = checkConveyor(spawner.conveyor, "a spawner"); !ok) {
@@ -1707,16 +1778,25 @@ tl::expected<Scene, std::string> loadScene(const std::filesystem::path& path) {
 }
 
 void moveScene(Scene& scene, const std::filesystem::path& from, const std::filesystem::path& to) {
-    if (scene.plcProgram.empty()) {
-        return;
+    // A file at `file`, named from the new folder (absolute if there's no way there).
+    const auto fromNewFolder = [&](const std::filesystem::path& file) {
+        const auto relative = file.lexically_relative(std::filesystem::absolute(to).lexically_normal());
+        return relative.empty() ? file.string() : relative.string();
+    };
+    if (!scene.plcProgram.empty() && !std::filesystem::path(scene.plcProgram).is_absolute()) {
+        scene.plcProgram = fromNewFolder(std::filesystem::absolute(from / scene.plcProgram).lexically_normal());
     }
-    const std::filesystem::path program = scene.plcProgram;
-    if (program.is_absolute()) {
-        return;
+    // An STL part is where it's found now: next to the scene, or in the
+    // examples. One that isn't found keeps its name.
+    for (auto& spawner : scene.spawners) {
+        if (spawner.shape != Shape::Stl || spawner.stl.file.empty() ||
+            std::filesystem::path(spawner.stl.file).is_absolute()) {
+            continue;
+        }
+        if (const auto found = findShapeFile(spawner.stl.file); !found.empty()) {
+            spawner.stl.file = fromNewFolder(std::filesystem::absolute(found).lexically_normal());
+        }
     }
-    const auto file = std::filesystem::absolute(from / program).lexically_normal();
-    const auto relative = file.lexically_relative(std::filesystem::absolute(to).lexically_normal());
-    scene.plcProgram = relative.empty() ? file.string() : relative.string();
 }
 
 } // namespace fsim

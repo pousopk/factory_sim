@@ -46,6 +46,10 @@ constexpr JPH::BroadPhaseLayer kMovingBroadPhase{1};
 
 } // namespace
 
+void initialiseJolt() {
+    initialiseJoltOnce();
+}
+
 // The broad phase is Jolt's first, coarse collision pass. Each object layer
 // maps to a broad phase layer; here simply one each.
 class Physics::BroadPhaseLayers final : public JPH::BroadPhaseLayerInterface {

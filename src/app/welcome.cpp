@@ -43,6 +43,10 @@ const std::vector<Demo>& demos() {
         {"Line-scan and area cameras",
          "A line-scan camera on the encoder and an area camera over one belt: see View > Camera view.",
          [] { return cameraDemo(); }},
+        {"Odd shapes",
+         "Frozen fish, bottles, bags, balls, brackets and an STL part past a photocell, a laser, a line-scan camera "
+         "and a light curtain, which all see their real outlines.",
+         [] { return shapesDemo(); }},
     };
     return list;
 }

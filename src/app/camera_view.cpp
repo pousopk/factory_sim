@@ -5,6 +5,7 @@
 // moving does during the exposure (blur) and noise are.
 #include "app/app.hpp"
 #include "app/widgets.hpp"
+#include <algorithm>
 #include <cmath>
 #include <fmt/format.h>
 #include <imgui.h>
@@ -48,8 +49,8 @@ std::vector<std::vector<DrawBox>> App::exposureMoments(const Camera& camera, dou
         const auto dt = static_cast<float>(t - world_->time());
         auto boxes = fixed;
         for (const auto& item : items) {
-            DrawBox box{item.position + item.velocity * dt, item.rotation, item.size, item.color};
-            box.round = item.shape == Shape::Tin;
+            auto box = itemBox(item);
+            box.center += item.velocity * dt;
             boxes.push_back(box);
         }
         moments.push_back(std::move(boxes));
@@ -104,10 +105,17 @@ void App::drawCameraView() {
         ImGui::TextColored(kDim, "%llu lines; pixel %.2f mm across, %.2f mm along",
                            static_cast<unsigned long long>(camera.image.taken), across * 1000.0, along * 1000.0);
         if (lineTexture_.texture() != 0 && lineTexture_.width() > 0) {
-            const float scale = available / static_cast<float>(lineTexture_.width());
-            ImGui::BeginChild("lines", ImVec2(0, 0), ImGuiChildFlags_None, ImGuiWindowFlags_HorizontalScrollbar);
+            // As wide as the panel, but small enough that the last 600 lines
+            // (half a metre or so: a whole product) fit its height; the same
+            // scale both ways, so the image keeps its proportions.
+            const float height = std::max(ImGui::GetContentRegionAvail().y, 50.0F);
+            const float lines = static_cast<float>(std::min(lineTexture_.height(), 600));
+            const float width = static_cast<float>(lineTexture_.width());
+            const float scale = std::min((available - ImGui::GetStyle().ScrollbarSize) / width, height / lines);
+            ImGui::BeginChild("lines", ImVec2(0, 0));
+            ImGui::SetCursorPosX((available - width * scale) / 2.0F);
             ImGui::Image(textureOf(lineTexture_.texture()),
-                         ImVec2(available, static_cast<float>(lineTexture_.height()) * scale));
+                         ImVec2(width * scale, static_cast<float>(lineTexture_.height()) * scale));
             ImGui::SetScrollHereY(1.0F); // follow the newest line
             ImGui::EndChild();
         }

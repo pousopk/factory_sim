@@ -72,6 +72,11 @@ FetchContent_Declare(json URL https://github.com/nlohmann/json/releases/download
 FetchContent_MakeAvailable(json)
 factory_sim_mark_system(nlohmann_json)
 
+# --- V-HACD: splits an STL part into convex pieces for the physics (one header) ---
+FetchContent_Declare(vhacd URL https://raw.githubusercontent.com/kmammou/v-hacd/v4.1.0/include/VHACD.h
+                     DOWNLOAD_NO_EXTRACT TRUE)
+FetchContent_MakeAvailable(vhacd)
+
 find_package(Threads REQUIRED)
 
 # --- Shared compile settings for our own targets ---
@@ -95,6 +100,8 @@ add_library(factory_sim_core STATIC
   src/sim/camera.cpp
   src/sim/drive.cpp
   src/sim/field_sensors.cpp
+  src/sim/item_shape.cpp
+  src/sim/convex_pieces.cpp
   src/sim/scene.cpp
   src/sim/actuators.cpp
   src/sim/io.cpp
@@ -105,6 +112,8 @@ target_link_libraries(factory_sim_core
   PUBLIC  factory_sim_options glm::glm-header-only Jolt Threads::Threads tl::expected
   PRIVATE fmt::fmt nlohmann_json::nlohmann_json
 )
+target_include_directories(factory_sim_core SYSTEM PRIVATE ${vhacd_SOURCE_DIR})
+set_source_files_properties(src/sim/convex_pieces.cpp PROPERTIES COMPILE_OPTIONS "-w")
 
 # --- soft_plc: the PLC that can control the line (milestone 6) ---
 # Used from source, next to factory_sim (or set -DFACTORY_SIM_SOFT_PLC_DIR=...).

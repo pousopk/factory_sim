@@ -106,6 +106,8 @@ private:
     void drawConveyorEquipment(std::size_t conveyor); // zones and carriage (equipment.cpp)
     void drawPhotocellInspector(std::size_t index);
     void drawSpawnerInspector(std::size_t index);
+    void drawShapeSettings(SpawnerSpec& spawner);
+    void drawStlSettings(SpawnerSpec& spawner);
     void drawPusherInspector(std::size_t index);
     void drawDiverterInspector(std::size_t index);
     void drawStopperInspector(std::size_t index);
@@ -172,7 +174,8 @@ private:
 
     // Files: the dialog open (if any), its folder and typed name, and a new
     // scene waiting for "replace the untitled one?".
-    enum class Dialog { None, Open, SaveAs };
+    enum class Dialog { None, Open, SaveAs, Stl }; // Stl: a spawner's part
+    std::size_t dialogSpawner_ = 0;                // which spawner an Stl dialog is for
     Dialog dialog_ = Dialog::None;
     std::optional<FileBrowser> browser_;
     std::string dialogName_;

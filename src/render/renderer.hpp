@@ -4,6 +4,7 @@
 #include "render/scene.hpp"
 #include "render/shader.hpp"
 #include "sim/camera.hpp"
+#include <map>
 #include <vector>
 
 // Draws the scene with OpenGL 3.3: a floor with a metre grid, and boxes
@@ -98,6 +99,17 @@ private:
     // The scene into `framebuffer` (0: the window), with its shadow pass.
     void render(const std::vector<DrawBox>& boxes, const glm::mat4& viewProjection, glm::vec3 eye, GLuint framebuffer,
                 int width, int height, int x = 0, int y = 0);
+
+    // An item shape's surface on the GPU, drawn instanced like the cube.
+    struct GpuMesh {
+        GLuint array = 0;
+        GLuint buffer = 0;
+        GLsizei vertices = 0;
+    };
+    GpuMesh upload(const ItemGeometry& geometry);
+    // Each item shape's mesh, uploaded the first time it's drawn, by its id
+    // (a few dozen at most: shapes are shared, sizes rounded to millimetres).
+    std::map<std::uint64_t, GpuMesh> meshes_;
 
     Stats stats_;
     Shader accumulate_;        // adds one render, weighted, to the sum

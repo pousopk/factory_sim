@@ -54,7 +54,17 @@ struct DrawBox {
     bool highlight = false; // part of the selection
     bool hovered = false;   // under the mouse
     bool round = false;     // a cylinder (a tin): size.x is its diameter, size.y its height
+    // Drawn as this item's surface instead of a box, stretched from its own
+    // size to `size` (the same size: as it is).
+    std::shared_ptr<const ItemGeometry> mesh{};
 };
+
+// An item as it's drawn: a box, a tin, or its own surface.
+DrawBox itemBox(const ItemView& item);
+// A see-through copy of an item where it was at some moment (a photocell's
+// trigger, a camera's exposure), a little bigger so it shows around it.
+DrawBox ghostBox(glm::vec3 center, glm::quat rotation, glm::vec3 size, Shape shape,
+                 std::shared_ptr<const ItemGeometry> geometry, glm::vec3 color, float alpha);
 
 // The parts of one conveyor: belt, two side frames, legs at both ends.
 std::vector<DrawBox> conveyorBoxes(const Conveyor& conveyor);

@@ -6,6 +6,7 @@
 #include <glm/gtc/matrix_transform.hpp>
 #include <glm/gtc/type_ptr.hpp>
 #include <limits>
+#include <map>
 #include <string>
 #include <utility>
 #include <vector>
@@ -97,6 +98,7 @@ void main() {
     bool highlight = (flags & 2) != 0;
     bool round = (flags & 4) != 0;
     bool hovered = (flags & 8) != 0;
+    bool mesh = (flags & 16) != 0; // an item's own surface: no box edges to darken
     if (unlit) {
         fragColor = vColor;
         return;
@@ -114,7 +116,7 @@ void main() {
     vec3 n = abs(vLocalNormal);
     float edge = n.x > 0.5 ? min(toEdge.y, toEdge.z) : n.y > 0.5 ? min(toEdge.x, toEdge.z) : min(toEdge.x, toEdge.y);
     if (round) edge = n.y > 0.5 ? 0.5 * vSize.x - length(vLocal.xz) : toEdge.y;
-    color *= mix(0.55, 1.0, smoothstep(0.0, 0.006, edge));
+    if (!mesh) color *= mix(0.55, 1.0, smoothstep(0.0, 0.006, edge));
     // Light: the sun where it isn't shadowed, plus a sky light that's
     // brighter from above.
     vec3 normal = normalize(vNormal);
@@ -347,18 +349,27 @@ constexpr float kUnlit = 1.0F;
 constexpr float kHighlight = 2.0F;
 constexpr float kRound = 4.0F;
 constexpr float kHovered = 8.0F;
+constexpr float kMesh = 16.0F;
 
 Instance instanceOf(const DrawBox& box) {
     Instance instance{};
     const auto place = glm::translate(glm::mat4(1.0F), box.center) * glm::mat4_cast(box.rotation);
     std::copy_n(glm::value_ptr(place), 16, instance.place);
-    std::copy_n(glm::value_ptr(box.size), 3, instance.size);
+    // A unit cube or cylinder is stretched to the box's size; a mesh, which
+    // has its own size already, only by how much the box differs from it.
+    auto size = box.size;
+    if (box.mesh != nullptr) {
+        const auto own = glm::max(box.mesh->size(), glm::vec3(1e-6F));
+        size = box.size / own;
+    }
+    std::copy_n(glm::value_ptr(size), 3, instance.size);
     const glm::vec4 color(box.color, box.alpha);
     std::copy_n(glm::value_ptr(color), 4, instance.color);
     instance.params[0] = box.stripeSpacing;
     instance.params[1] = box.stripeOffset;
     instance.params[2] = (box.unlit ? kUnlit : 0.0F) + (box.highlight ? kHighlight : 0.0F) +
-                         (box.round ? kRound : 0.0F) + (box.hovered ? kHovered : 0.0F);
+                         (box.round ? kRound : 0.0F) + (box.hovered ? kHovered : 0.0F) +
+                         (box.mesh != nullptr ? kMesh : 0.0F);
     return instance;
 }
 
@@ -581,7 +592,26 @@ Renderer::Renderer()
     glGenVertexArrays(1, &emptyArray_);
 }
 
+Renderer::GpuMesh Renderer::upload(const ItemGeometry& geometry) {
+    const auto& surface = geometry.surface();
+    std::vector<float> data;
+    data.reserve(surface.positions.size() * 6);
+    for (std::size_t i = 0; i < surface.positions.size(); ++i) {
+        const auto& p = surface.positions[i];
+        const auto& n = surface.normals[i];
+        data.insert(data.end(), {p.x, p.y, p.z, n.x, n.y, n.z});
+    }
+    GpuMesh mesh;
+    mesh.array = makeArray(mesh.buffer, data.data(), data.size() * sizeof(float), instanceBuffer_);
+    mesh.vertices = static_cast<GLsizei>(surface.positions.size());
+    return mesh;
+}
+
 Renderer::~Renderer() {
+    for (auto& [id, mesh] : meshes_) {
+        glDeleteBuffers(1, &mesh.buffer);
+        glDeleteVertexArrays(1, &mesh.array);
+    }
     glDeleteVertexArrays(1, &emptyArray_);
     glDeleteQueries(2, timer_);
     glDeleteFramebuffers(1, &shadowFramebuffer_);
@@ -618,38 +648,57 @@ void Renderer::draw(const std::vector<DrawBox>& boxes, const OrbitCamera& camera
 
 void Renderer::render(const std::vector<DrawBox>& boxes, const glm::mat4& viewProjection, glm::vec3 eye,
                       GLuint framebuffer, int width, int height, int x, int y) {
-    // The boxes as instance records, in four groups: solid cubes, solid
-    // cylinders, then the see-through ones (drawn last, over the rest).
+    // The boxes as instance records, in batches drawn with one call each:
+    // the same mesh (the cube, the cylinder, or one item shape's surface),
+    // all solid or all see-through. Solid ones first, then see-through
+    // ones, which are drawn over the rest; the map keeps them in that order.
+    struct Batch {
+        std::vector<Instance> instances;
+        const ItemGeometry* geometry = nullptr;
+        std::size_t first = 0;
+    };
+    std::map<std::pair<bool, std::uint64_t>, Batch> batches; // (see-through, 0 cube / 1 cylinder / 2 + shape id)
+    for (const auto& box : boxes) {
+        const std::uint64_t mesh = box.mesh != nullptr ? 2 + box.mesh->id() : box.round ? 1 : 0;
+        auto& batch = batches[{box.alpha < 1.0F, mesh}];
+        batch.geometry = box.mesh.get();
+        batch.instances.push_back(instanceOf(box));
+    }
     std::vector<Instance> instances;
     instances.reserve(boxes.size());
-    std::array<std::size_t, 5> start{}; // where each group starts, and the end
-    const auto group = [](const DrawBox& box) { return (box.alpha < 1.0F ? 2 : 0) + (box.round ? 1 : 0); };
-    for (int g = 0; g < 4; ++g) {
-        start[static_cast<std::size_t>(g)] = instances.size();
-        for (const auto& box : boxes) {
-            if (group(box) == g) {
-                instances.push_back(instanceOf(box));
-            }
+    for (auto& [key, batch] : batches) {
+        batch.first = instances.size();
+        instances.insert(instances.end(), batch.instances.begin(), batch.instances.end());
+        if (key.second >= 2 && meshes_.find(key.second) == meshes_.end()) {
+            meshes_.emplace(key.second, upload(*batch.geometry)); // a shape not drawn before
         }
     }
-    start[4] = instances.size();
     glBindBuffer(GL_ARRAY_BUFFER, instanceBuffer_);
     // A new buffer every frame ("orphaning"): the GPU may still be drawing
     // from last frame's, and this way neither waits for the other.
     glBufferData(GL_ARRAY_BUFFER, static_cast<GLsizeiptr>(instances.size() * sizeof(Instance)), instances.data(),
                  GL_STREAM_DRAW);
-    const auto drawGroup = [&](int g) {
-        const auto first = start[static_cast<std::size_t>(g)];
-        const auto count = static_cast<GLsizei>(start[static_cast<std::size_t>(g) + 1] - first);
-        if (count == 0) {
-            return;
+    const auto drawBatches = [&](bool seeThrough) {
+        for (const auto& [key, batch] : batches) {
+            if (key.first != seeThrough) {
+                continue;
+            }
+            GLuint array = cubeArray_;
+            GLsizei vertices = 36;
+            if (key.second == 1) {
+                array = cylinderArray_;
+                vertices = cylinderVertices_;
+            } else if (key.second >= 2) {
+                const auto& mesh = meshes_.at(key.second);
+                array = mesh.array;
+                vertices = mesh.vertices;
+            }
+            glBindVertexArray(array);
+            glBindBuffer(GL_ARRAY_BUFFER, instanceBuffer_);
+            pointAtInstances(batch.first);
+            glDrawArraysInstanced(GL_TRIANGLES, 0, vertices, static_cast<GLsizei>(batch.instances.size()));
+            ++stats_.drawCalls;
         }
-        const bool round = g % 2 == 1;
-        glBindVertexArray(round ? cylinderArray_ : cubeArray_);
-        glBindBuffer(GL_ARRAY_BUFFER, instanceBuffer_);
-        pointAtInstances(first);
-        glDrawArraysInstanced(GL_TRIANGLES, 0, round ? cylinderVertices_ : 36, count);
-        ++stats_.drawCalls;
     };
 
     // The sun's view: an orthographic box around the line (its boxes' extent,
@@ -683,8 +732,7 @@ void Renderer::render(const std::vector<DrawBox>& boxes, const glm::mat4& viewPr
         glPolygonOffset(2.0F, 4.0F);
         depthShader_.use();
         depthShader_.set("uLightSpace", lightSpace);
-        drawGroup(0);
-        drawGroup(1);
+        drawBatches(false);
         glDisable(GL_POLYGON_OFFSET_FILL);
     }
 
@@ -712,15 +760,13 @@ void Renderer::render(const std::vector<DrawBox>& boxes, const glm::mat4& viewPr
     boxShader_.set("uLightSpace", lightSpace);
     boxShader_.set("uShadowMap", 0);
     boxShader_.set("uShadows", shadows ? 1.0F : 0.0F);
-    drawGroup(0);
-    drawGroup(1);
+    drawBatches(false);
     // See-through boxes, blended over what's behind them, without hiding
     // each other (no depth writes).
     glEnable(GL_BLEND);
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     glDepthMask(GL_FALSE);
-    drawGroup(2);
-    drawGroup(3);
+    drawBatches(true);
     glDepthMask(GL_TRUE);
     glDisable(GL_BLEND);
     glBindVertexArray(0);

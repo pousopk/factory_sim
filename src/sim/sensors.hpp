@@ -1,10 +1,12 @@
 #pragma once
+#include "sim/item_shape.hpp"
 #include "sim/signal.hpp"
 #include <cstddef>
 #include <cstdint>
 #include <deque>
 #include <glm/glm.hpp>
 #include <glm/gtc/quaternion.hpp>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -31,10 +33,6 @@
 namespace fsim {
 
 using ItemId = std::uint64_t;
-
-// What an item is: a box (size: length, height, width), or a tin standing
-// upright (size: diameter, height, diameter).
-enum class Shape { Box, Tin };
 
 struct PhotocellSpec {
     std::string name = "B1";
@@ -66,6 +64,7 @@ struct Trigger {
     glm::quat itemRotation{1.0F, 0.0F, 0.0F, 0.0F};
     glm::vec3 itemSize{0.0F};
     Shape itemShape = Shape::Box;
+    std::shared_ptr<const ItemGeometry> itemGeometry{}; // its shape, if not a box or a tin
 };
 
 struct Photocell {
